@@ -2,6 +2,7 @@ import asyncio
 from pathlib import Path
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QMainWindow,
@@ -10,7 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.core.app_state import AppState
-from app.core.task_manager import TaskStatus
+from app.core.task_manager import DownloadTask, TaskStatus
 from app.database.repositories import load_download_tasks
 from app.services.download_service import DownloadService
 from app.services.persistence_service import PersistenceService
@@ -77,6 +78,13 @@ class MainWindow(QMainWindow):
 
     def _connect_signals(self):
         self.home_page.url_analyzed.connect(self._on_url_analyzed)
+        self._create_actions()
+
+    def _create_actions(self):
+        quit_action = QAction("Exit", self)
+        quit_action.setShortcut("Ctrl+Q")
+        quit_action.triggered.connect(self.close)
+        self.addAction(quit_action)
 
     def _init_services(self):
         max_concurrent = self._settings.max_concurrent()
@@ -85,12 +93,49 @@ class MainWindow(QMainWindow):
 
     def _restore_tasks(self):
         tasks = load_download_tasks()
+        interrupted_tasks = []
+        paused_tasks = []
+
         for task in tasks:
-            if not task.is_terminal:
-                self._app_state.download_manager._download_tasks.append(task)
+            self._app_state.download_manager._download_tasks.append(task)
             self._app_state.download_manager._emit_progress(task)
 
+            if not task.is_terminal:
+                if task.status in (TaskStatus.DOWNLOADING, TaskStatus.PREPARING, TaskStatus.VERIFYING):
+                    task.status = TaskStatus.PAUSED
+                    task.error = "Download was interrupted"
+                    interrupted_tasks.append(task)
+                else:
+                    paused_tasks.append(task)
+
         self.history_page.refresh()
+
+        if interrupted_tasks:
+            self._prompt_recovery(interrupted_tasks)
+
+        if paused_tasks:
+            log.info("%d paused downloads available for manual resume", len(paused_tasks))
+
+    def _prompt_recovery(self, tasks: list[DownloadTask]):
+        from PySide6.QtWidgets import QMessageBox
+
+        msg = (
+            f"VANTA was closed during {len(tasks)} download(s).\n\n"
+            "Resume these downloads?"
+        )
+        reply = QMessageBox.question(
+            self,
+            "Download Recovery",
+            msg,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+
+        if reply == QMessageBox.Yes:
+            for task in tasks:
+                self._app_state.download_manager.resume_download(task)
+            self.stacked_widget.setCurrentIndex(1)
+            self.sidebar.set_active(1)
 
     def _on_page_changed(self, index: int):
         self.stacked_widget.setCurrentIndex(index)
@@ -123,5 +168,9 @@ class MainWindow(QMainWindow):
             log.error("Failed to analyze URL: %s", e, exc_info=True)
             self.home_page.show_error(
                 "Analysis Failed",
-                f"Could not process this URL. Check the logs for details.",
+                "Could not process this URL. Check the logs for details.",
             )
+
+    def closeEvent(self, event):
+        self._persistence.flush()
+        event.accept()

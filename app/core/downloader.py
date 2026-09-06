@@ -1,5 +1,5 @@
 import asyncio
-import os
+import sys
 import time
 from pathlib import Path
 from typing import Callable, Optional
@@ -13,6 +13,14 @@ from app.utils.logger import get_logger
 log = get_logger("vanta.core.downloader")
 
 ProgressCallback = Callable[[DownloadTask], None]
+
+_DOWNLOAD_TIMEOUT = httpx.Timeout(
+    connect=15.0,
+    read=60.0,
+    write=60.0,
+    pool=30.0,
+)
+_FLUSH_INTERVAL = 5.0
 
 
 class DownloadManager:
@@ -39,6 +47,23 @@ class DownloadManager:
         for cb in self._callbacks:
             cb(task)
 
+    def _set_status(
+        self,
+        task: DownloadTask,
+        status: TaskStatus,
+        error: Optional[str] = None,
+    ):
+        task.status = status
+        task.error = error
+        task.updated_at = time.time()
+        self._emit_progress(task)
+
+    def find_task(self, task_id: str) -> DownloadTask | None:
+        for task in self._download_tasks:
+            if task.id == task_id:
+                return task
+        return None
+
     async def add_download(
         self,
         name: str,
@@ -52,8 +77,9 @@ class DownloadManager:
             task.status = TaskStatus.QUEUED
             task.error = None
         else:
+            import uuid
             task = DownloadTask(
-                id=str(int(time.time() * 1000))[-8:],
+                id=uuid.uuid4().hex[:12],
                 name=name,
                 source_url=source_url,
                 download_url=download_url,
@@ -82,127 +108,185 @@ class DownloadManager:
                 if task.status == TaskStatus.PAUSED:
                     was_paused = True
                 else:
-                    task.status = TaskStatus.CANCELLED
-                    task.error = "Download was cancelled"
+                    self._set_status(
+                        task,
+                        TaskStatus.CANCELLED,
+                        "Download was cancelled",
+                    )
                 raise
             except Exception as e:
                 log.error("Download failed for '%s': %s", task.name, e, exc_info=True)
-                task.status = TaskStatus.FAILED
-                task.error = str(e)
+                self._set_status(task, TaskStatus.FAILED, str(e))
             finally:
                 self._tasks.pop(task.id, None)
                 if not was_paused:
                     self._emit_progress(task)
 
     async def _execute_download(self, task: DownloadTask):
-        task.status = TaskStatus.PREPARING
-        self._emit_progress(task)
+        self._set_status(task, TaskStatus.PREPARING)
 
         dest_path = Path(task.destination)
+        part_path = dest_path.with_suffix(dest_path.suffix + ".part")
+
         dest_path.parent.mkdir(parents=True, exist_ok=True)
 
         resume_position = 0
-        file_mode = "wb"
-
-        if dest_path.exists():
-            resume_position = dest_path.stat().st_size
+        if part_path.exists():
+            resume_position = part_path.stat().st_size
             if resume_position > 0:
-                file_mode = "ab"
+                log.info("Resuming download from %d bytes", resume_position)
 
-        async with httpx.AsyncClient(follow_redirects=True) as client:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=_DOWNLOAD_TIMEOUT) as client:
             headers = {}
             if resume_position > 0:
                 headers["Range"] = f"bytes={resume_position}-"
+
+            need_restart = False
+            effective_resume = resume_position
 
             async with client.stream(
                 "GET",
                 task.download_url,
                 headers=headers,
-                timeout=httpx.Timeout(60),
             ) as response:
                 if response.status_code == 416:
-                    resume_position = 0
-                    file_mode = "wb"
-                    dest_path.unlink(missing_ok=True)
-                    async with client.stream(
-                        "GET", task.download_url, timeout=httpx.Timeout(60)
-                    ) as r2:
-                        await self._stream_to_file(r2, task, dest_path, 0, "wb")
-                    return
+                    need_restart = True
+                else:
+                    if response.status_code == 206:
+                        task.supports_resume = True
+                    elif response.status_code == 200 and resume_position > 0:
+                        log.warning(
+                            "Server does not support Range requests (returned 200). "
+                            "Restarting download from zero."
+                        )
+                        part_path.unlink(missing_ok=True)
+                        effective_resume = 0
+                    elif response.status_code == 200:
+                        task.supports_resume = False
 
-                if response.status_code not in (200, 206):
-                    response.raise_for_status()
+                    if response.status_code not in (200, 206):
+                        response.raise_for_status()
 
-                task.supports_resume = response.status_code == 206 and resume_position > 0
+                    self._validate_response(response, task)
+                    await self._stream_to_file(response, task, part_path, effective_resume)
 
-                await self._stream_to_file(response, task, dest_path, resume_position, file_mode)
+            if need_restart:
+                part_path.unlink(missing_ok=True)
+                headers.pop("Range", None)
 
-        task.status = TaskStatus.VERIFYING
-        self._emit_progress(task)
+                async with client.stream(
+                    "GET",
+                    task.download_url,
+                    headers=headers,
+                ) as r2:
+                    self._validate_response(r2, task)
+                    if r2.status_code not in (200, 206):
+                        r2.raise_for_status()
+                    await self._stream_to_file(r2, task, part_path, 0)
 
-        if self._verify_file(dest_path, task):
-            task.status = TaskStatus.COMPLETED
+        self._set_status(task, TaskStatus.VERIFYING)
+
+        if self._verify_file(part_path, dest_path, task):
+            part_path.rename(dest_path)
+            self._set_status(task, TaskStatus.COMPLETED)
         else:
-            task.status = TaskStatus.FAILED
-            task.error = "File verification failed"
+            self._set_status(task, TaskStatus.FAILED, "File verification failed")
+            part_path.unlink(missing_ok=True)
 
-        self._emit_progress(task)
-
-    async def _stream_to_file(
+    async def _process_download_stream(
         self,
         response,
         task: DownloadTask,
-        dest_path: Path,
+        part_path: Path,
         resume_position: int,
-        file_mode: str,
+    ):
+        self._validate_response(response, task)
+
+        if response.status_code not in (200, 206):
+            response.raise_for_status()
+
+        await self._stream_to_file(response, task, part_path, resume_position)
+
+    def _validate_response(self, response: httpx.Response, task: DownloadTask):
+        content_type = response.headers.get("content-type", "").lower()
+
+        if "text/html" in content_type:
+            raise ValueError(
+                f"Server returned an HTML page instead of '{task.name}' "
+                f"(Content-Type: {content_type}). "
+                "This usually means access was denied or blocked."
+            )
+
+        if "text/plain" in content_type and response.headers.get("content-disposition") is None:
+            raise ValueError(
+                f"Server returned a text response instead of '{task.name}' "
+                f"(Content-Type: {content_type})."
+            )
+
+    async def _stream_to_file(
+        self,
+        response: httpx.Response,
+        task: DownloadTask,
+        part_path: Path,
+        resume_position: int,
     ):
         total_size = int(response.headers.get("content-length", 0))
 
-        if resume_position > 0:
-            if total_size > 0:
-                total_size += resume_position
-        elif total_size > 0:
-            pass
+        if resume_position > 0 and total_size > 0:
+            total_size += resume_position
 
         if total_size > 0:
             task.total_size = total_size
 
-        task.status = TaskStatus.DOWNLOADING
-        self._emit_progress(task)
+        self._set_status(task, TaskStatus.DOWNLOADING)
 
         downloaded = resume_position
+        session_downloaded = 0
         last_emit = downloaded
         start_time = time.monotonic()
+        last_flush = start_time
 
-        with open(dest_path, file_mode) as f:
-            async for chunk in response.aiter_bytes(CHUNK_SIZE):
-                f.write(chunk)
+        file_mode = "ab" if resume_position > 0 else "wb"
+
+        with open(part_path, file_mode) as f:
+            try:
+                async for chunk in response.aiter_bytes(CHUNK_SIZE):
+                    f.write(chunk)
+
+                    session_downloaded += len(chunk)
+                    downloaded += len(chunk)
+                    elapsed = time.monotonic() - start_time
+                    speed = session_downloaded / elapsed if elapsed > 0 else 0.0
+
+                    task.downloaded_size = downloaded
+                    if total_size > 0:
+                        task.progress = round((downloaded / total_size) * 100, 1)
+                    task.speed = speed
+                    task.updated_at = time.time()
+
+                    if downloaded - last_emit >= CHUNK_SIZE:
+                        self._emit_progress(task)
+                        last_emit = downloaded
+
+                    now = time.monotonic()
+                    if now - last_flush >= _FLUSH_INTERVAL:
+                        f.flush()
+                        last_flush = now
+            finally:
                 f.flush()
-
-                downloaded += len(chunk)
-                elapsed = time.monotonic() - start_time
-                speed = downloaded / elapsed if elapsed > 0 else 0.0
-
-                task.downloaded_size = downloaded
-                if total_size > 0:
-                    task.progress = round((downloaded / total_size) * 100, 1)
-                task.speed = speed
-                task.updated_at = time.time()
-
-                if downloaded - last_emit >= CHUNK_SIZE:
-                    self._emit_progress(task)
-                    last_emit = downloaded
 
         self._emit_progress(task)
 
-    def _verify_file(self, dest_path: Path, task: DownloadTask) -> bool:
-        if not dest_path.exists():
+    def _verify_file(self, part_path: Path, dest_path: Path, task: DownloadTask) -> bool:
+        if not part_path.exists():
             return False
 
         try:
-            actual_size = dest_path.stat().st_size
+            actual_size = part_path.stat().st_size
+
             if task.total_size > 0:
-                return actual_size >= task.total_size
+                return actual_size == task.total_size
+
             return actual_size > 0
         except Exception:
             return False
@@ -215,7 +299,9 @@ class DownloadManager:
             self._emit_progress(task)
 
     def resume_download(self, task: DownloadTask):
-        if task.status == TaskStatus.PAUSED or task.status == TaskStatus.FAILED:
+        if task.status in (TaskStatus.PAUSED, TaskStatus.FAILED):
+            self._set_status(task, TaskStatus.QUEUED)
+
             asyncio_task = asyncio.create_task(self._run(task))
             self._tasks[task.id] = asyncio_task
 
@@ -223,10 +309,14 @@ class DownloadManager:
         asyncio_task = self._tasks.get(task.id)
         if asyncio_task and not asyncio_task.done():
             asyncio_task.cancel()
-        task.status = TaskStatus.CANCELLED
-        task.error = "Download was cancelled"
-        self._emit_progress(task)
+        self._set_status(task, TaskStatus.CANCELLED, "Download was cancelled")
 
     def set_max_concurrent(self, value: int):
         self._max_concurrent = value
         self._semaphore = asyncio.Semaphore(value)
+
+    def get_incomplete_downloads(self) -> list[DownloadTask]:
+        return [
+            t for t in self._download_tasks
+            if not t.is_terminal and t.download_url
+        ]
