@@ -1,5 +1,4 @@
 import asyncio
-import sys
 import time
 from pathlib import Path
 from typing import Callable, Optional
@@ -57,6 +56,31 @@ class DownloadManager:
         task.error = error
         task.updated_at = time.time()
         self._emit_progress(task)
+        self._update_queue_positions()
+
+    def _update_queue_positions(self):
+        queued = [
+            t for t in self._download_tasks
+            if t.status == TaskStatus.QUEUED
+        ]
+        for idx, task in enumerate(queued, start=1):
+            task.queue_position = idx
+        for task in self._download_tasks:
+            if task.status != TaskStatus.QUEUED:
+                task.queue_position = 0
+
+    def get_queue_position(self, task_id: str) -> int:
+        task = self.find_task(task_id)
+        if task is None or task.status != TaskStatus.QUEUED:
+            return 0
+        queued = [
+            t for t in self._download_tasks
+            if t.status == TaskStatus.QUEUED
+        ]
+        for idx, t in enumerate(queued, start=1):
+            if t.id == task_id:
+                return idx
+        return 0
 
     def find_task(self, task_id: str) -> DownloadTask | None:
         for task in self._download_tasks:
@@ -93,6 +117,7 @@ class DownloadManager:
             self._download_tasks.append(task)
 
         self._emit_progress(task)
+        self._update_queue_positions()
 
         asyncio_task = asyncio.create_task(self._run(task))
         self._tasks[task.id] = asyncio_task
@@ -193,20 +218,6 @@ class DownloadManager:
             self._set_status(task, TaskStatus.FAILED, "File verification failed")
             part_path.unlink(missing_ok=True)
 
-    async def _process_download_stream(
-        self,
-        response,
-        task: DownloadTask,
-        part_path: Path,
-        resume_position: int,
-    ):
-        self._validate_response(response, task)
-
-        if response.status_code not in (200, 206):
-            response.raise_for_status()
-
-        await self._stream_to_file(response, task, part_path, resume_position)
-
     def _validate_response(self, response: httpx.Response, task: DownloadTask):
         content_type = response.headers.get("content-type", "").lower()
 
@@ -294,9 +305,8 @@ class DownloadManager:
     def pause_download(self, task: DownloadTask):
         asyncio_task = self._tasks.get(task.id)
         if asyncio_task and not asyncio_task.done():
-            task.status = TaskStatus.PAUSED
+            self._set_status(task, TaskStatus.PAUSED)
             asyncio_task.cancel()
-            self._emit_progress(task)
 
     def resume_download(self, task: DownloadTask):
         if task.status in (TaskStatus.PAUSED, TaskStatus.FAILED):
@@ -320,3 +330,54 @@ class DownloadManager:
             t for t in self._download_tasks
             if not t.is_terminal and t.download_url
         ]
+
+    def pause_all(self):
+        for task in list(self._download_tasks):
+            if task.status in (
+                TaskStatus.DOWNLOADING,
+                TaskStatus.PREPARING,
+                TaskStatus.VERIFYING,
+                TaskStatus.QUEUED,
+            ):
+                self.pause_download(task)
+
+    def resume_all(self):
+        for task in list(self._download_tasks):
+            if task.status == TaskStatus.PAUSED:
+                self.resume_download(task)
+
+    def cancel_all(self):
+        for task in list(self._download_tasks):
+            if not task.is_terminal:
+                self.cancel_download(task)
+
+    def clear_completed(self):
+        self._download_tasks = [
+            t for t in self._download_tasks
+            if not t.is_terminal
+        ]
+        self._update_queue_positions()
+
+    def retry_failed(self):
+        for task in list(self._download_tasks):
+            if task.status == TaskStatus.FAILED:
+                dest_path = Path(task.destination)
+                part_path = dest_path.with_suffix(dest_path.suffix + ".part")
+                has_part = part_path.exists() and part_path.stat().st_size > 0
+                was_resume_failure = "html" in (task.error or "").lower()
+                if has_part and not was_resume_failure:
+                    task.status = TaskStatus.PAUSED
+                    task.error = None
+                    self.resume_download(task)
+                else:
+                    part_path.unlink(missing_ok=True)
+                    dest_path.unlink(missing_ok=True)
+                    task.downloaded_size = 0
+                    task.progress = 0.0
+                    task.speed = 0.0
+                    task.total_size = 0
+                    task.supports_resume = False
+                    task.error = None
+                    self._set_status(task, TaskStatus.QUEUED)
+                    asyncio_task = asyncio.create_task(self._run(task))
+                    self._tasks[task.id] = asyncio_task

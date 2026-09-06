@@ -48,6 +48,17 @@ class DownloadTask:
             TaskStatus.CANCELLED,
         )
 
+    @property
+    def queue_position(self) -> int:
+        return self._queue_position
+
+    @queue_position.setter
+    def queue_position(self, value: int):
+        self._queue_position = value
+
+    def __post_init__(self):
+        self._queue_position = 0
+
     def update_progress(self, downloaded: int, total: int, speed: float):
         self.downloaded_size = downloaded
         if total > 0:
@@ -72,4 +83,5 @@ class DownloadTask:
             "updated_at": self.updated_at,
             "error": self.error,
             "supports_resume": self.supports_resume,
+            "queue_position": self.queue_position,
         }

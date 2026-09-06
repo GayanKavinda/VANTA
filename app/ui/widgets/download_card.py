@@ -82,6 +82,10 @@ class DownloadCard(QFrame):
         self._pause_btn.setFixedSize(90, 32)
         self._pause_btn.clicked.connect(lambda: self.pause_requested.emit(self._task.id))
 
+        self._resume_btn = QPushButton("Resume")
+        self._resume_btn.setFixedSize(90, 32)
+        self._resume_btn.clicked.connect(lambda: self.resume_requested.emit(self._task.id))
+
         self._cancel_btn = QPushButton("Cancel")
         self._cancel_btn.setFixedSize(90, 32)
         self._cancel_btn.clicked.connect(lambda: self.cancel_requested.emit(self._task.id))
@@ -105,27 +109,24 @@ class DownloadCard(QFrame):
         self._button_row.removeWidget(self._cancel_btn)
         self._button_row.removeWidget(self._retry_btn)
 
-        if task.status == TaskStatus.DOWNLOADING:
+        if task.status == TaskStatus.QUEUED:
+            pos = task.queue_position
+            queue_info = f"Queued · #{pos}" if pos > 0 else "Queued"
+            self._status_label.setText(queue_info)
+            self._button_row.addWidget(self._cancel_btn)
+        elif task.status == TaskStatus.DOWNLOADING:
             self._button_row.addWidget(self._pause_btn)
             self._button_row.addWidget(self._cancel_btn)
         elif task.status == TaskStatus.PAUSED:
-            self._button_row.addWidget(self._resume_btn if hasattr(self, "_resume_btn") else self._create_resume_btn())
+            self._button_row.addWidget(self._resume_btn)
             self._button_row.addWidget(self._cancel_btn)
-        elif task.status in (TaskStatus.QUEUED, TaskStatus.PREPARING):
-            self._button_row.addWidget(self._pause_btn)
+        elif task.status in (TaskStatus.PREPARING, TaskStatus.VERIFYING):
             self._button_row.addWidget(self._cancel_btn)
         elif task.status == TaskStatus.FAILED:
             self._button_row.addWidget(self._retry_btn)
             self._button_row.addWidget(self._cancel_btn)
         elif task.status == TaskStatus.COMPLETED:
             pass
-
-    def _create_resume_btn(self) -> QPushButton:
-        btn = QPushButton("Resume")
-        btn.setFixedSize(90, 32)
-        btn.clicked.connect(lambda: self.resume_requested.emit(self._task.id))
-        self._resume_btn = btn
-        return btn
 
     @staticmethod
     def _format_size(task: DownloadTask) -> str:

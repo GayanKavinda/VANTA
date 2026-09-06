@@ -64,7 +64,10 @@ class MainWindow(QMainWindow):
         self.settings_page = SettingsPage()
         self.settings_page.settings_changed.connect(self._on_settings_changed)
 
-        self.downloads_page.set_download_manager(self._app_state.download_manager)
+        self.downloads_page.set_download_manager(
+            self._app_state.download_manager,
+            self._download_service,
+        )
 
         self.stacked_widget.addWidget(self.home_page)
         self.stacked_widget.addWidget(self.downloads_page)
@@ -98,7 +101,8 @@ class MainWindow(QMainWindow):
 
         for task in tasks:
             self._app_state.download_manager._download_tasks.append(task)
-            self._app_state.download_manager._emit_progress(task)
+            if not task.is_terminal:
+                self._app_state.download_manager._emit_progress(task)
 
             if not task.is_terminal:
                 if task.status in (TaskStatus.DOWNLOADING, TaskStatus.PREPARING, TaskStatus.VERIFYING):
@@ -156,7 +160,7 @@ class MainWindow(QMainWindow):
             self.home_page.show_analysis_result(result)
 
             if result.status == "ready" and result.files:
-                task = await self._download_service.start_download(url)
+                task = await self._download_service.start_download(url, result=result)
                 if task:
                     self.stacked_widget.setCurrentIndex(1)
                     self.sidebar.set_active(1)

@@ -34,8 +34,10 @@ class DownloadService:
         self,
         url: str,
         destination: str | Path | None = None,
+        result: AnalysisResult | None = None,
     ) -> DownloadTask | None:
-        result = await self._analyzer.analyze(url)
+        if result is None:
+            result = await self._analyzer.analyze(url)
 
         if not result.files:
             log.warning("No files found in analysis result for URL: %s", url)
@@ -76,3 +78,18 @@ class DownloadService:
             if task.id == task_id:
                 self._download_manager.cancel_download(task)
                 break
+
+    def pause_all(self):
+        self._download_manager.pause_all()
+
+    def resume_all(self):
+        self._download_manager.resume_all()
+
+    def cancel_all(self):
+        self._download_manager.cancel_all()
+
+    def clear_completed(self):
+        self._download_manager.clear_completed()
+
+    def retry_failed(self):
+        self._download_manager.retry_failed()
