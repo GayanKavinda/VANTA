@@ -86,11 +86,69 @@ class GenericSourceAdapter(BaseSourceAdapter):
 
         try:
             async with httpx.AsyncClient(
-                follow_redirects=True,
+                follow_redirects=False,
                 timeout=_TIMEOUT,
                 headers={"User-Agent": _USER_AGENT},
             ) as client:
-                response = await client.get(url)
+                from app.services.download_security import is_safe_redirect
+
+                current_url = url
+                response: httpx.Response | None = None
+                for hop in range(6):
+                    response = await client.get(current_url)
+                    if response.status_code not in (
+                        httpx.codes.MOVED_PERMANENTLY,
+                        httpx.codes.FOUND,
+                        httpx.codes.SEE_OTHER,
+                        httpx.codes.TEMPORARY_REDIRECT,
+                        httpx.codes.PERMANENT_REDIRECT,
+                    ):
+                        break
+                    if hop >= 5:
+                        await response.aclose()
+                        return AnalysisResult(
+                            title="Redirect loop",
+                            source=self.name,
+                            files=[],
+                            status="error",
+                        )
+                    location = response.headers.get("location") or response.headers.get("Location")
+                    await response.aclose()
+                    if not location:
+                        return AnalysisResult(
+                            title="Redirect without Location",
+                            source=self.name,
+                            files=[],
+                            status="error",
+                        )
+                    from urllib.parse import urljoin
+                    target = urljoin(current_url, location)
+                    decision = is_safe_redirect(
+                        current_url,
+                        target,
+                        allow_private_networks=self._allow_private,
+                        blocked_hosts=self._blocked_hosts,
+                    )
+                    if not decision.is_safe:
+                        log.warning(
+                            "GenericSourceAdapter unsafe redirect %s -> %s: %s",
+                            current_url, target, decision.reason,
+                        )
+                        return AnalysisResult(
+                            title=f"Redirect rejected: {decision.reason}",
+                            source=self.name,
+                            files=[],
+                            status="error",
+                        )
+                    current_url = target
+
+                if response is None:
+                    return AnalysisResult(
+                        title="No response",
+                        source=self.name,
+                        files=[],
+                        status="error",
+                    )
         except httpx.RequestError as e:
             log.error("GenericSourceAdapter request error for %s: %s", url, e)
             return AnalysisResult(
@@ -101,6 +159,7 @@ class GenericSourceAdapter(BaseSourceAdapter):
             )
 
         if response.status_code >= 400:
+            await response.aclose()
             return AnalysisResult(
                 title=f"HTTP {response.status_code}",
                 source=self.name,
@@ -110,6 +169,7 @@ class GenericSourceAdapter(BaseSourceAdapter):
 
         content_type = response.headers.get("content-type", "").lower()
         if "text/html" not in content_type and "application/xhtml" not in content_type:
+            await response.aclose()
             return AnalysisResult(
                 title="Non-HTML Response",
                 source=self.name,
@@ -118,7 +178,7 @@ class GenericSourceAdapter(BaseSourceAdapter):
             )
 
         html = response.text[:_MAX_BYTES]
-        page_url = str(response.url)
+        page_url = str(response.url) or url
 
         parser = parse_html(html)
         title = parser.title or page_url

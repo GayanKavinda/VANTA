@@ -100,11 +100,7 @@ class HomePage(QWidget):
             return
         self.download_requested.emit(self._current_source_url, view)
 
-    def show_analysis_view(
-        self,
-        view_model: AnalysisViewModel,
-        result: AnalysisResult | None = None,
-    ):
+    def show_analysis_view(self, view_model: AnalysisViewModel):
         self._current_view = view_model
         if view_model.is_error:
             self._result_area.show_error(view_model.title or "Analysis failed", "")

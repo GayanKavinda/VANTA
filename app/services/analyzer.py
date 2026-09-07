@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Optional
 
-from app.core.models import AnalysisResult, ResolvedResource
+from app.core.models import AnalysisResult, DownloadFile, ResolvedResource
 from app.services.source_detector import SourceDetector
 from app.utils.logger import get_logger
 

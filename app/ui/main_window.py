@@ -139,7 +139,7 @@ class MainWindow(QMainWindow):
         )
 
         if reply == QMessageBox.Yes:
-            for task in interrupted_tasks:
+            for task in tasks:
                 self._app_state.download_manager.resume_download(task)
             self.stacked_widget.setCurrentIndex(1)
             self.sidebar.set_active(1)
@@ -173,7 +173,7 @@ class MainWindow(QMainWindow):
 
             result, context = await self._download_service.analyze_url_with_context(url)
             view_model = build_view_model(result, context)
-            self.home_page.show_analysis_view(view_model, result)
+            self.home_page.show_analysis_view(view_model)
 
         except Exception as e:
             log.error("Failed to analyze URL: %s", e, exc_info=True)
