@@ -46,22 +46,62 @@ class ResourceSelectionController:
             sid for sid in self._state.selected_ids if sid in eligible
         }
 
-    def is_selected(self, resource_id: str) -> bool:
-        return resource_id in self._state.selected_ids
+    def is_selected(self, resource_or_id) -> bool:
+        """Return whether the given resource (or resource id) is selected.
 
-    def toggle(self, resource_id: str):
-        if resource_id not in self._state.eligible_ids:
-            return
-        if resource_id in self._state.selected_ids:
-            self._state.selected_ids.discard(resource_id)
+        Accepts either a `ResourceView`/`DownloadFile`-like object or a
+        raw id string. This is purely a convenience for call sites that
+        already have the resource object in hand; the underlying storage
+        is still a set of string ids.
+        """
+        if isinstance(resource_or_id, str):
+            return resource_or_id in self._state.selected_ids
+        return resource_id_for(resource_or_id) in self._state.selected_ids
+
+    def toggle(self, resource_or_id):
+        """Toggle selection for the given resource (or resource id)."""
+        if isinstance(resource_or_id, str):
+            rid = resource_or_id
         else:
-            self._state.selected_ids.add(resource_id)
+            rid = resource_id_for(resource_or_id)
+        if rid not in self._state.eligible_ids:
+            return
+        if rid in self._state.selected_ids:
+            self._state.selected_ids.discard(rid)
+        else:
+            self._state.selected_ids.add(rid)
 
     def select_all(self):
         self._state.selected_ids = set(self._state.eligible_ids)
 
     def deselect_all(self):
         self._state.selected_ids.clear()
+
+    def select_visible(self, visible_ids: Iterable[str]):
+        """Select every id in `visible_ids` that is currently eligible.
+
+        Hidden selections (those not in `visible_ids` but still eligible) are
+        preserved. Filtering only changes visibility; this method only
+        adds to the selection set, never removes.
+        """
+        for vid in visible_ids:
+            if vid in self._state.eligible_ids:
+                self._state.selected_ids.add(vid)
+
+    def deselect_visible(self, visible_ids: Iterable[str]):
+        """Deselect every id in `visible_ids` that is currently selected.
+
+        Hidden selections (those not in `visible_ids`) are preserved. This
+        method only removes from the selection set, never adds.
+        """
+        for vid in visible_ids:
+            if vid in self._state.selected_ids:
+                self._state.selected_ids.discard(vid)
+
+    def visible_selection_count(self, visible_ids: Iterable[str]) -> int:
+        """Return the number of currently visible resources that are selected."""
+        visible_set = set(visible_ids)
+        return sum(1 for vid in self._state.selected_ids if vid in visible_set)
 
     def selected_resources(self, resources: list) -> list:
         """Return selected resources in the order they appear in `resources`.
