@@ -1,6 +1,6 @@
 import time
 
-from app.core.task_manager import DownloadTask, TaskStatus
+from app.core.task_manager import DownloadTask, DownloadErrorType, TaskStatus
 from app.database.connection import get_session
 from app.database.models import DownloadRecord, SettingRecord
 from app.database.repositories import (
@@ -143,3 +143,21 @@ def test_settings_download_dir():
     settings = SettingsService()
     dir_path = settings.download_dir()
     assert dir_path is not None
+
+
+def test_error_type_persisted():
+    task = DownloadTask(
+        id="errtype001",
+        name="file.zip",
+        source_url="https://example.com",
+        download_url="https://example.com/file.zip",
+        destination="/tmp/file.zip",
+        status=TaskStatus.FAILED,
+        error_type=DownloadErrorType.ACCESS_DENIED,
+    )
+
+    save_download_task(task)
+
+    loaded = load_download_tasks()
+    assert len(loaded) == 1
+    assert loaded[0].error_type == DownloadErrorType.ACCESS_DENIED

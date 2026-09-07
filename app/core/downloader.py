@@ -65,6 +65,7 @@ class DownloadManager:
         ]
         for idx, task in enumerate(queued, start=1):
             task.queue_position = idx
+            task.queue_order = idx
         for task in self._download_tasks:
             if task.status != TaskStatus.QUEUED:
                 task.queue_position = 0
@@ -182,6 +183,7 @@ class DownloadManager:
                     if response.status_code == 206:
                         task.supports_resume = True
                     elif response.status_code == 200 and resume_position > 0:
+                        task.error_type = DownloadErrorType.RANGE_UNSUPPORTED
                         log.warning(
                             "Server does not support Range requests (returned 200). "
                             "Restarting download from zero."
@@ -264,32 +266,36 @@ class DownloadManager:
 
         file_mode = "ab" if resume_position > 0 else "wb"
 
-        with open(part_path, file_mode) as f:
-            try:
-                async for chunk in response.aiter_bytes(CHUNK_SIZE):
-                    f.write(chunk)
+        try:
+            with open(part_path, file_mode) as f:
+                try:
+                    async for chunk in response.aiter_bytes(CHUNK_SIZE):
+                        f.write(chunk)
 
-                    session_downloaded += len(chunk)
-                    downloaded += len(chunk)
-                    elapsed = time.monotonic() - start_time
-                    speed = session_downloaded / elapsed if elapsed > 0 else 0.0
+                        session_downloaded += len(chunk)
+                        downloaded += len(chunk)
+                        elapsed = time.monotonic() - start_time
+                        speed = session_downloaded / elapsed if elapsed > 0 else 0.0
 
-                    task.downloaded_size = downloaded
-                    if total_size > 0:
-                        task.progress = round((downloaded / total_size) * 100, 1)
-                    task.speed = speed
-                    task.updated_at = time.time()
+                        task.downloaded_size = downloaded
+                        if total_size > 0:
+                            task.progress = round((downloaded / total_size) * 100, 1)
+                        task.speed = speed
+                        task.updated_at = time.time()
 
-                    if downloaded - last_emit >= CHUNK_SIZE:
-                        self._emit_progress(task)
-                        last_emit = downloaded
+                        if downloaded - last_emit >= CHUNK_SIZE:
+                            self._emit_progress(task)
+                            last_emit = downloaded
 
-                    now = time.monotonic()
-                    if now - last_flush >= _FLUSH_INTERVAL:
-                        f.flush()
-                        last_flush = now
-            finally:
-                f.flush()
+                        now = time.monotonic()
+                        if now - last_flush >= _FLUSH_INTERVAL:
+                            f.flush()
+                            last_flush = now
+                finally:
+                    f.flush()
+        except OSError:
+            task.error_type = DownloadErrorType.DISK
+            raise
 
         self._emit_progress(task)
 
@@ -321,10 +327,10 @@ class DownloadManager:
             self._tasks[task.id] = asyncio_task
 
     def cancel_download(self, task: DownloadTask):
+        self._set_status(task, TaskStatus.CANCELLED, "Download was cancelled")
         asyncio_task = self._tasks.get(task.id)
         if asyncio_task and not asyncio_task.done():
             asyncio_task.cancel()
-        self._set_status(task, TaskStatus.CANCELLED, "Download was cancelled")
 
     def set_max_concurrent(self, value: int):
         self._max_concurrent = value
@@ -405,6 +411,15 @@ class DownloadManager:
             self._tasks[task.id] = asyncio_task
 
     def restore_tasks(self, tasks: list[DownloadTask]):
+        tasks.sort(
+            key=lambda t: (
+                0 if t.status == TaskStatus.QUEUED else 1,
+                t.queue_order if t.queue_order > 0 else 999999,
+                t.created_at,
+            )
+        )
+
+        interrupted_tasks = []
         for task in tasks:
             if task.status in (
                 TaskStatus.DOWNLOADING,
@@ -414,8 +429,13 @@ class DownloadManager:
                 task.status = TaskStatus.PAUSED
                 task.error = "Download was interrupted"
                 task.error_type = DownloadErrorType.NETWORK
+                interrupted_tasks.append(task)
 
             self._download_tasks.append(task)
-            self._emit_progress(task)
 
         self._update_queue_positions()
+
+        for task in self._download_tasks:
+            self._emit_progress(task)
+
+        return interrupted_tasks

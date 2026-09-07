@@ -464,3 +464,275 @@ async def test_sqlite_state_persisted_after_transitions(queue_manager, slow_serv
         assert model.downloaded_size == slow_server["a.bin"]["size"]
     finally:
         db.close()
+
+
+@pytest.mark.asyncio
+async def test_retry_task_only_retries_requested_task(queue_manager):
+    a = DownloadTask(
+        id="retry_a",
+        name="a.bin",
+        source_url="http://example.com/a.bin",
+        download_url="http://example.com/a.bin",
+        destination="/tmp/a.bin",
+        status=TaskStatus.FAILED,
+    )
+    b = DownloadTask(
+        id="retry_b",
+        name="b.bin",
+        source_url="http://example.com/b.bin",
+        download_url="http://example.com/b.bin",
+        destination="/tmp/b.bin",
+        status=TaskStatus.FAILED,
+    )
+    queue_manager._download_tasks.extend([a, b])
+
+    queue_manager.retry_task("retry_a")
+
+    assert a.status == TaskStatus.QUEUED
+    assert b.status == TaskStatus.FAILED
+
+
+def test_retry_task_ignores_non_failed_task(queue_manager):
+    task = DownloadTask(
+        id="retry_ok",
+        name="a.bin",
+        source_url="http://example.com/a.bin",
+        download_url="http://example.com/a.bin",
+        destination="/tmp/a.bin",
+        status=TaskStatus.COMPLETED,
+    )
+    queue_manager._download_tasks.append(task)
+
+    queue_manager.retry_task("retry_ok")
+
+    assert task.status == TaskStatus.COMPLETED
+
+
+def test_clear_completed_keeps_failed(queue_manager):
+    completed = DownloadTask(
+        id="clr_comp",
+        name="a.bin",
+        source_url="http://example.com/a.bin",
+        download_url="http://example.com/a.bin",
+        destination="/tmp/a.bin",
+        status=TaskStatus.COMPLETED,
+    )
+    failed = DownloadTask(
+        id="clr_fail",
+        name="b.bin",
+        source_url="http://example.com/b.bin",
+        download_url="http://example.com/b.bin",
+        destination="/tmp/b.bin",
+        status=TaskStatus.FAILED,
+    )
+    queue_manager._download_tasks.extend([completed, failed])
+
+    queue_manager.clear_completed()
+
+    assert len(queue_manager.download_tasks) == 1
+    assert queue_manager.download_tasks[0].id == "clr_fail"
+
+
+def test_clear_completed_keeps_cancelled(queue_manager):
+    completed = DownloadTask(
+        id="clr_comp2",
+        name="a.bin",
+        source_url="http://example.com/a.bin",
+        download_url="http://example.com/a.bin",
+        destination="/tmp/a.bin",
+        status=TaskStatus.COMPLETED,
+    )
+    cancelled = DownloadTask(
+        id="clr_cancel",
+        name="b.bin",
+        source_url="http://example.com/b.bin",
+        download_url="http://example.com/b.bin",
+        destination="/tmp/b.bin",
+        status=TaskStatus.CANCELLED,
+    )
+    queue_manager._download_tasks.extend([completed, cancelled])
+
+    queue_manager.clear_completed()
+
+    assert len(queue_manager.download_tasks) == 1
+    assert queue_manager.download_tasks[0].id == "clr_cancel"
+
+
+def test_restore_tasks_converts_interrupted_to_paused(queue_manager):
+    downloading = DownloadTask(
+        id="restore_down",
+        name="a.bin",
+        source_url="http://example.com/a.bin",
+        download_url="http://example.com/a.bin",
+        destination="/tmp/a.bin",
+        status=TaskStatus.DOWNLOADING,
+        queue_order=2,
+    )
+    preparing = DownloadTask(
+        id="restore_prep",
+        name="b.bin",
+        source_url="http://example.com/b.bin",
+        download_url="http://example.com/b.bin",
+        destination="/tmp/b.bin",
+        status=TaskStatus.PREPARING,
+        queue_order=1,
+    )
+    verifying = DownloadTask(
+        id="restore_verify",
+        name="c.bin",
+        source_url="http://example.com/c.bin",
+        download_url="http://example.com/c.bin",
+        destination="/tmp/c.bin",
+        status=TaskStatus.VERIFYING,
+        queue_order=3,
+    )
+    paused = DownloadTask(
+        id="restore_paused",
+        name="d.bin",
+        source_url="http://example.com/d.bin",
+        download_url="http://example.com/d.bin",
+        destination="/tmp/d.bin",
+        status=TaskStatus.PAUSED,
+        queue_order=0,
+    )
+
+    queue_manager.restore_tasks([downloading, preparing, verifying, paused])
+
+    assert downloading.status == TaskStatus.PAUSED
+    assert downloading.error == "Download was interrupted"
+    assert downloading.error_type == DownloadErrorType.NETWORK
+    assert preparing.status == TaskStatus.PAUSED
+    assert preparing.error == "Download was interrupted"
+    assert verifying.status == TaskStatus.PAUSED
+    assert paused.status == TaskStatus.PAUSED
+
+
+def test_restore_tasks_emits_final_state(queue_manager):
+    downloading = DownloadTask(
+        id="restore_emit",
+        name="a.bin",
+        source_url="http://example.com/a.bin",
+        download_url="http://example.com/a.bin",
+        destination="/tmp/a.bin",
+        status=TaskStatus.DOWNLOADING,
+        queue_order=1,
+    )
+
+    emitted = []
+    queue_manager.add_progress_callback(lambda t: emitted.append(t))
+
+    queue_manager.restore_tasks([downloading])
+
+    assert downloading.status == TaskStatus.PAUSED
+    assert downloading in emitted
+
+    queue_manager.remove_progress_callback(lambda t: emitted.append(t))
+
+
+def test_queue_order_persisted(tmp_path):
+    from app.database.repositories import save_download_task, load_download_tasks
+
+    a = DownloadTask(
+        id="qorder_a",
+        name="a.bin",
+        source_url="http://example.com/a.bin",
+        download_url="http://example.com/a.bin",
+        destination=str(tmp_path / "a.bin"),
+        status=TaskStatus.QUEUED,
+        queue_order=3,
+    )
+    b = DownloadTask(
+        id="qorder_b",
+        name="b.bin",
+        source_url="http://example.com/b.bin",
+        download_url="http://example.com/b.bin",
+        destination=str(tmp_path / "b.bin"),
+        status=TaskStatus.QUEUED,
+        queue_order=1,
+    )
+    c = DownloadTask(
+        id="qorder_c",
+        name="c.bin",
+        source_url="http://example.com/c.bin",
+        download_url="http://example.com/c.bin",
+        destination=str(tmp_path / "c.bin"),
+        status=TaskStatus.QUEUED,
+        queue_order=2,
+    )
+
+    for task in [a, b, c]:
+        save_download_task(task)
+
+    try:
+        loaded = load_download_tasks()
+        loaded_map = {t.id: t for t in loaded}
+
+        assert loaded_map["qorder_a"].queue_order == 3
+        assert loaded_map["qorder_b"].queue_order == 1
+        assert loaded_map["qorder_c"].queue_order == 2
+    finally:
+        from app.database.connection import get_session
+        from app.database.models import DownloadRecord
+        db = get_session()
+        try:
+            db.query(DownloadRecord).filter(DownloadRecord.id.in_(["qorder_a", "qorder_b", "qorder_c"])).delete(synchronize_session=False)
+            db.commit()
+        finally:
+            db.close()
+
+
+def test_queue_order_restored(tmp_path):
+    from app.database.repositories import save_download_task, load_download_tasks
+
+    a = DownloadTask(
+        id="qorder_restore_a",
+        name="a.bin",
+        source_url="http://example.com/a.bin",
+        download_url="http://example.com/a.bin",
+        destination=str(tmp_path / "a.bin"),
+        status=TaskStatus.QUEUED,
+        queue_order=3,
+    )
+    b = DownloadTask(
+        id="qorder_restore_b",
+        name="b.bin",
+        source_url="http://example.com/b.bin",
+        download_url="http://example.com/b.bin",
+        destination=str(tmp_path / "b.bin"),
+        status=TaskStatus.QUEUED,
+        queue_order=1,
+    )
+    c = DownloadTask(
+        id="qorder_restore_c",
+        name="c.bin",
+        source_url="http://example.com/c.bin",
+        download_url="http://example.com/c.bin",
+        destination=str(tmp_path / "c.bin"),
+        status=TaskStatus.QUEUED,
+        queue_order=2,
+    )
+
+    for task in [a, b, c]:
+        save_download_task(task)
+
+    try:
+        loaded = load_download_tasks()
+        dm = DownloadManager(max_concurrent=1)
+        dm.restore_tasks(loaded)
+
+        queued = [t for t in dm.download_tasks if t.status == TaskStatus.QUEUED]
+        assert queued[0].id == "qorder_restore_b"
+        assert queued[0].queue_position == 1
+        assert queued[1].id == "qorder_restore_c"
+        assert queued[1].queue_position == 2
+        assert queued[2].id == "qorder_restore_a"
+        assert queued[2].queue_position == 3
+    finally:
+        from app.database.connection import get_session
+        from app.database.models import DownloadRecord
+        db = get_session()
+        try:
+            db.query(DownloadRecord).filter(DownloadRecord.id.in_(["qorder_restore_a", "qorder_restore_b", "qorder_restore_c"])).delete(synchronize_session=False)
+            db.commit()
+        finally:
+            db.close()

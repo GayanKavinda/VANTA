@@ -1,15 +1,17 @@
 import asyncio
+import builtins
 import os
 import shutil
 import threading
 import time
+import unittest.mock
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 
 import pytest
 
 from app.core.downloader import DownloadManager
-from app.core.task_manager import TaskStatus
+from app.core.task_manager import DownloadErrorType, TaskStatus
 from app.utils.logger import setup_logger
 
 setup_logger()
@@ -542,3 +544,53 @@ async def test_resume_download_state_transitions(
     assert TaskStatus.PREPARING in resume_states
     assert TaskStatus.DOWNLOADING in resume_states
     assert TaskStatus.VERIFYING in resume_states
+
+
+@pytest.mark.asyncio
+async def test_range_unsupported_error_type(no_range_server, download_manager, tmp_path):
+    dest = tmp_path / "downloads" / "norange_error_test.bin"
+    part_path = dest.with_suffix(dest.suffix + ".part")
+
+    partial_data = b"VANTA test download " * 10
+    part_path.parent.mkdir(parents=True, exist_ok=True)
+    part_path.write_bytes(partial_data)
+
+    task = await download_manager.add_download(
+        name="norange_error_test.bin",
+        source_url=no_range_server["url"],
+        download_url=no_range_server["url"],
+        destination=str(dest),
+    )
+
+    assert await _wait_for_status(task, TaskStatus.COMPLETED)
+    assert task.status == TaskStatus.COMPLETED
+    assert task.error_type == DownloadErrorType.RANGE_UNSUPPORTED
+    assert dest.exists()
+    assert dest.stat().st_size == no_range_server["file_size"]
+
+
+@pytest.mark.asyncio
+async def test_disk_error_classification(test_server, download_manager, tmp_path):
+    dest = tmp_path / "downloads" / "disk_error_test.bin"
+    part_path = dest.with_suffix(dest.suffix + ".part")
+    part_path.parent.mkdir(parents=True, exist_ok=True)
+
+    task = await download_manager.add_download(
+        name="disk_error_test.bin",
+        source_url=test_server["url"],
+        download_url=test_server["url"],
+        destination=str(dest),
+    )
+
+    original_open = builtins.open
+
+    def failing_open(path, mode="r", *args, **kwargs):
+        if str(path) == str(part_path) and "b" in mode:
+            raise OSError("Simulated disk error")
+        return original_open(path, mode, *args, **kwargs)
+
+    with unittest.mock.patch("builtins.open", side_effect=failing_open):
+        assert await _wait_for_status(task, TaskStatus.FAILED, timeout=10.0)
+
+    assert task.status == TaskStatus.FAILED
+    assert task.error_type == DownloadErrorType.DISK

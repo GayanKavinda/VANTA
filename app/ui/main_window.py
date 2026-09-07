@@ -101,27 +101,17 @@ class MainWindow(QMainWindow):
 
     def _restore_tasks(self):
         tasks = load_download_tasks()
-        interrupted_tasks = []
-        paused_tasks = []
 
-        for task in tasks:
-            if task.status in (
-                TaskStatus.DOWNLOADING,
-                TaskStatus.PREPARING,
-                TaskStatus.VERIFYING,
-            ):
-                task.status = TaskStatus.PAUSED
-                task.error = "Download was interrupted"
-                interrupted_tasks.append(task)
-            elif task.status == TaskStatus.PAUSED:
-                paused_tasks.append(task)
-
-        self._app_state.download_manager.restore_tasks(tasks)
+        interrupted_tasks = self._app_state.download_manager.restore_tasks(tasks)
         self.history_page.refresh()
 
         if interrupted_tasks:
             self._prompt_recovery(interrupted_tasks)
 
+        paused_tasks = [
+            t for t in tasks
+            if t.status == TaskStatus.PAUSED
+        ]
         if paused_tasks:
             log.info("%d paused downloads available for manual resume", len(paused_tasks))
 
