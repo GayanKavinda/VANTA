@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.core.app_state import AppState
+from app.core.queue_controller import QueueController
 from app.core.task_manager import DownloadTask, TaskStatus
 from app.database.repositories import load_download_tasks
 from app.services.download_service import DownloadService
@@ -34,10 +35,14 @@ class MainWindow(QMainWindow):
         self.resize(1200, 750)
 
         self._app_state = AppState()
+        self._queue_controller = QueueController(
+            self._app_state.download_manager
+        )
         self._settings = SettingsService()
         self._download_service = DownloadService(
             analyzer=self._app_state.analyzer,
             download_manager=self._app_state.download_manager,
+            queue_controller=self._queue_controller,
             file_manager=self._app_state.file_manager,
         )
         self._persistence = PersistenceService()
@@ -64,8 +69,8 @@ class MainWindow(QMainWindow):
         self.settings_page = SettingsPage()
         self.settings_page.settings_changed.connect(self._on_settings_changed)
 
-        self.downloads_page.set_download_manager(
-            self._app_state.download_manager,
+        self.downloads_page.set_queue_controller(
+            self._queue_controller,
             self._download_service,
         )
 
@@ -111,7 +116,7 @@ class MainWindow(QMainWindow):
     def _restore_tasks(self):
         tasks = load_download_tasks()
 
-        interrupted_tasks = self._app_state.download_manager.restore_tasks(tasks)
+        interrupted_tasks = self._queue_controller.restore_tasks(tasks)
         self.history_page.refresh()
 
         if interrupted_tasks:
@@ -141,7 +146,7 @@ class MainWindow(QMainWindow):
 
         if reply == QMessageBox.Yes:
             for task in tasks:
-                self._app_state.download_manager.resume_download(task)
+                self._queue_controller.resume_download(task)
             self.stacked_widget.setCurrentIndex(1)
             self.sidebar.set_active(1)
 

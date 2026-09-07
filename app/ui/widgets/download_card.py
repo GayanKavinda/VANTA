@@ -16,6 +16,8 @@ class DownloadCard(QFrame):
     resume_requested = Signal(str)
     cancel_requested = Signal(str)
     retry_requested = Signal(str)
+    open_requested = Signal(str)
+    remove_requested = Signal(str)
 
     STATUS_LABELS = {
         TaskStatus.QUEUED: "Queued",
@@ -72,7 +74,18 @@ class DownloadCard(QFrame):
         self._speed_label.setStyleSheet("font-size: 12px; color: #8A8A9A;")
         detail_row.addWidget(self._speed_label)
 
+        self._eta_label = QLabel()
+        self._eta_label.setStyleSheet("font-size: 12px; color: #8A8A9A;")
+        detail_row.addWidget(self._eta_label)
+
+        detail_row.addStretch(1)
         layout.addLayout(detail_row)
+
+        self._error_label = QLabel()
+        self._error_label.setStyleSheet("font-size: 12px; color: #FF6B6B;")
+        self._error_label.setWordWrap(True)
+        self._error_label.hide()
+        layout.addWidget(self._error_label)
 
         self._button_row = QHBoxLayout()
         self._button_row.setSpacing(8)
@@ -94,29 +107,52 @@ class DownloadCard(QFrame):
         self._retry_btn.setFixedSize(90, 32)
         self._retry_btn.clicked.connect(lambda: self.retry_requested.emit(self._task.id))
 
+        self._open_btn = QPushButton("Open Folder")
+        self._open_btn.setFixedSize(100, 32)
+        self._open_btn.clicked.connect(lambda: self.open_requested.emit(self._task.id))
+
+        self._remove_btn = QPushButton("Remove")
+        self._remove_btn.setFixedSize(90, 32)
+        self._remove_btn.clicked.connect(lambda: self.remove_requested.emit(self._task.id))
+
         layout.addLayout(self._button_row)
 
     def update_from_task(self, task: DownloadTask):
         self._task = task
+
         self._name_label.setText(task.name)
         self._status_label.setText(self.STATUS_LABELS.get(task.status, task.status.value))
         self._progress_bar.setValue(int(task.progress))
 
         self._size_label.setText(self._format_size(task))
-        self._speed_label.setText(self._format_speed(task.speed))
+        self._speed_label.setText(task.format_speed())
+
+        if task.eta_seconds is not None and task.is_downloading:
+            self._eta_label.setText(f"ETA {task.format_eta()}")
+            self._eta_label.show()
+        else:
+            self._eta_label.hide()
+
+        if task.status == TaskStatus.FAILED and task.error:
+            self._error_label.setText(task.error)
+            self._error_label.show()
+        else:
+            self._error_label.hide()
+
+        if task.status == TaskStatus.QUEUED and task.queue_position > 0:
+            self._status_label.setText(f"Queued · #{task.queue_position}")
 
         for button in (
             self._pause_btn,
             self._resume_btn,
             self._cancel_btn,
             self._retry_btn,
+            self._open_btn,
+            self._remove_btn,
         ):
             self._button_row.removeWidget(button)
 
         if task.status == TaskStatus.QUEUED:
-            pos = task.queue_position
-            queue_info = f"Queued · #{pos}" if pos > 0 else "Queued"
-            self._status_label.setText(queue_info)
             self._button_row.addWidget(self._cancel_btn)
         elif task.status == TaskStatus.DOWNLOADING:
             self._button_row.addWidget(self._pause_btn)
@@ -130,7 +166,8 @@ class DownloadCard(QFrame):
             self._button_row.addWidget(self._retry_btn)
             self._button_row.addWidget(self._cancel_btn)
         elif task.status == TaskStatus.COMPLETED:
-            pass
+            self._button_row.addWidget(self._open_btn)
+            self._button_row.addWidget(self._remove_btn)
 
     @staticmethod
     def _format_size(task: DownloadTask) -> str:
@@ -142,13 +179,5 @@ class DownloadCard(QFrame):
             return f"{n:.1f} PB"
 
         if task.total_size > 0:
-            return f"{fmt(task.downloaded_size)} / {fmt(float(task.total_size))}"
+            return f"{fmt(float(task.downloaded_size))} / {fmt(float(task.total_size))}"
         return f"{fmt(float(task.downloaded_size))} downloaded"
-
-    @staticmethod
-    def _format_speed(speed: float) -> str:
-        for unit in ("B/s", "KB/s", "MB/s", "GB/s"):
-            if speed < 1024:
-                return f"{speed:.1f} {unit}"
-            speed /= 1024
-        return f"{speed:.1f} TB/s"

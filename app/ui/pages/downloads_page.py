@@ -1,4 +1,8 @@
-from PySide6.QtCore import Qt
+import os
+from pathlib import Path
+
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -9,8 +13,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.core.queue_controller import QueueController
 from app.core.task_manager import DownloadTask, TaskStatus
-from app.core.downloader import DownloadManager
+from app.services.download_service import DownloadService
 from app.ui.widgets.download_card import DownloadCard
 from app.utils.logger import get_logger
 
@@ -22,8 +27,8 @@ class DownloadsPage(QWidget):
         super().__init__()
 
         self._cards: dict[str, DownloadCard] = {}
-        self._download_manager: DownloadManager | None = None
-        self._download_service = None
+        self._queue_controller: QueueController | None = None
+        self._download_service: DownloadService | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(48, 48, 48, 48)
@@ -81,7 +86,7 @@ class DownloadsPage(QWidget):
         self._content_layout.setSpacing(12)
         self._content_layout.setAlignment(Qt.AlignTop)
 
-        self._placeholder = QLabel("No active downloads")
+        self._placeholder = QLabel("No downloads")
         self._placeholder.setStyleSheet("color: #8A8A9A; padding: 20px;")
         self._content_layout.addWidget(self._placeholder)
 
@@ -93,13 +98,21 @@ class DownloadsPage(QWidget):
 
         layout.addWidget(scroll, stretch=1)
 
-    def set_download_manager(self, manager: DownloadManager, service=None):
-        self._download_manager = manager
+    def set_queue_controller(
+        self,
+        controller: QueueController,
+        service: DownloadService | None = None,
+    ):
+        self._queue_controller = controller
         self._download_service = service
-        manager.add_progress_callback(self._on_progress)
+        controller.add_queue_callback(self._on_queue_changed)
         self._update_summary()
 
-    def _on_progress(self, task: DownloadTask):
+    def _on_queue_changed(self, task: DownloadTask | None):
+        if task is None:
+            self._update_summary()
+            return
+
         if task.id not in self._cards:
             if task.is_terminal and task.status == TaskStatus.COMPLETED:
                 return
@@ -108,9 +121,13 @@ class DownloadsPage(QWidget):
             card.resume_requested.connect(self._on_resume_clicked)
             card.cancel_requested.connect(self._on_cancel_clicked)
             card.retry_requested.connect(self._on_retry_clicked)
+            card.open_requested.connect(self._on_open_clicked)
+            card.remove_requested.connect(self._on_remove_clicked)
             self._cards[task.id] = card
             self._placeholder.setVisible(False)
-            self._content_layout.insertWidget(self._content_layout.count() - 1, card)
+            self._content_layout.insertWidget(
+                self._content_layout.count() - 1, card
+            )
 
         if task.id in self._cards:
             self._cards[task.id].update_from_task(task)
@@ -118,28 +135,25 @@ class DownloadsPage(QWidget):
         self._update_summary()
 
     def _update_summary(self):
-        manager = self._download_manager
-        if manager is None:
+        controller = self._queue_controller
+        if controller is None:
             return
 
         active = sum(
-            1 for t in manager.download_tasks
+            1 for t in controller.tasks
             if t.status in (
                 TaskStatus.PREPARING,
                 TaskStatus.DOWNLOADING,
                 TaskStatus.VERIFYING,
             )
         )
-        queued = sum(
-            1 for t in manager.download_tasks
-            if t.status == TaskStatus.QUEUED
-        )
+        queued = controller.queued_count
         paused = sum(
-            1 for t in manager.download_tasks
+            1 for t in controller.tasks
             if t.status == TaskStatus.PAUSED
         )
         completed = sum(
-            1 for t in manager.download_tasks
+            1 for t in controller.tasks
             if t.status == TaskStatus.COMPLETED
         )
 
@@ -155,34 +169,27 @@ class DownloadsPage(QWidget):
 
         self._summary.setText(" · ".join(parts) if parts else "No downloads")
 
-    def _get_manager(self):
-        return self._download_manager
-
     def _on_pause_all(self):
-        if self._download_service:
-            self._download_service.pause_all()
+        if self._queue_controller:
+            self._queue_controller.pause_all()
 
     def _on_resume_all(self):
-        if self._download_service:
-            self._download_service.resume_all()
+        if self._queue_controller:
+            self._queue_controller.resume_all()
 
     def _on_cancel_all(self):
-        if self._download_service:
-            self._download_service.cancel_all()
+        if self._queue_controller:
+            self._queue_controller.cancel_all()
 
     def _on_retry_failed(self):
-        if self._download_service:
-            self._download_service.retry_failed()
+        if self._queue_controller:
+            self._queue_controller.retry_failed()
 
     def _on_clear_completed(self):
-        if self._download_service:
-            removed_ids = self._download_service.clear_completed()
-        else:
-            removed_ids = []
-
-        manager = self._get_manager()
-        if manager is None:
+        if self._queue_controller is None:
             return
+
+        removed_ids = self._queue_controller.clear_completed()
 
         for task_id in removed_ids:
             card = self._cards.pop(task_id, None)
@@ -190,7 +197,7 @@ class DownloadsPage(QWidget):
                 card.deleteLater()
 
         for task_id in list(self._cards.keys()):
-            task = manager.find_task(task_id)
+            task = self._queue_controller.find_task(task_id)
             if task is not None and task.status == TaskStatus.COMPLETED:
                 card = self._cards.pop(task_id)
                 card.deleteLater()
@@ -200,33 +207,63 @@ class DownloadsPage(QWidget):
         self._update_summary()
 
     def _on_pause_clicked(self, task_id: str):
-        manager = self._get_manager()
-        if manager is None:
+        controller = self._queue_controller
+        if controller is None:
             return
-        task = manager.find_task(task_id)
+        task = controller.find_task(task_id)
         if task is not None:
-            manager.pause_download(task)
+            controller.pause_download(task)
 
     def _on_resume_clicked(self, task_id: str):
-        manager = self._get_manager()
-        if manager is None:
+        controller = self._queue_controller
+        if controller is None:
             return
-        task = manager.find_task(task_id)
+        task = controller.find_task(task_id)
         if task is not None:
-            manager.resume_download(task)
+            controller.resume_download(task)
 
     def _on_cancel_clicked(self, task_id: str):
-        manager = self._get_manager()
-        if manager is None:
+        controller = self._queue_controller
+        if controller is None:
             return
-        task = manager.find_task(task_id)
+        task = controller.find_task(task_id)
         if task is not None:
-            manager.cancel_download(task)
+            controller.cancel_download(task)
 
     def _on_retry_clicked(self, task_id: str):
-        manager = self._get_manager()
-        if manager is None:
+        controller = self._queue_controller
+        if controller is None:
             return
-        task = manager.find_task(task_id)
+        task = controller.find_task(task_id)
         if task is not None and task.status == TaskStatus.FAILED:
-            manager.retry_task(task_id)
+            controller.retry_download(task_id)
+
+    def _on_open_clicked(self, task_id: str):
+        controller = self._queue_controller
+        if controller is None:
+            return
+        task = controller.find_task(task_id)
+        if task is not None:
+            dest_dir = str(Path(task.destination).parent)
+            if dest_dir and os.path.isdir(dest_dir):
+                QDesktopServices.openUrl(QUrl.fromLocalFile(dest_dir))
+
+    def _on_remove_clicked(self, task_id: str):
+        controller = self._queue_controller
+        if controller is None:
+            return
+        card = self._cards.pop(task_id, None)
+        if card is not None:
+            card.deleteLater()
+
+        task = controller.find_task(task_id)
+        if task is not None and task.is_terminal:
+            manager = controller.download_manager
+            manager._download_tasks = [
+                t for t in manager.download_tasks if t.id != task_id
+            ]
+            controller._manager._tasks.pop(task_id, None)
+
+        if not self._cards:
+            self._placeholder.setVisible(True)
+        self._update_summary()

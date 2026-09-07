@@ -4,6 +4,7 @@ from typing import Optional
 from app.core.downloader import DownloadManager
 from app.core.file_manager import FileManager
 from app.core.models import AnalysisResult, DownloadFile
+from app.core.queue_controller import QueueController
 from app.core.task_manager import DownloadTask, TaskStatus
 from app.services.analyzer import AnalyzerService
 from app.utils.logger import get_logger
@@ -18,14 +19,20 @@ class DownloadService:
         analyzer: AnalyzerService,
         download_manager: DownloadManager,
         file_manager: FileManager,
+        queue_controller: QueueController | None = None,
     ):
         self._analyzer = analyzer
         self._download_manager = download_manager
         self._file_manager = file_manager
+        self._queue_controller = queue_controller
 
     @property
     def download_manager(self) -> DownloadManager:
         return self._download_manager
+
+    @property
+    def queue_controller(self) -> QueueController | None:
+        return self._queue_controller
 
     @property
     def analyzer(self) -> AnalyzerService:
@@ -78,12 +85,20 @@ class DownloadService:
         filename = self._file_manager.safe_join(file.name)
         dest_path = self._file_manager.get_unique_path(filename, dest_dir)
 
-        task = await self._download_manager.add_download(
-            name=file.name,
-            source_url=source_url,
-            download_url=file.url,
-            destination=str(dest_path),
-        )
+        if self._queue_controller is not None:
+            task = await self._queue_controller.add_download(
+                name=file.name,
+                source_url=source_url,
+                download_url=file.url,
+                destination=str(dest_path),
+            )
+        else:
+            task = await self._download_manager.add_download(
+                name=file.name,
+                source_url=source_url,
+                download_url=file.url,
+                destination=str(dest_path),
+            )
 
         log.info(
             "Started download task '%s' (%s) -> %s",
@@ -95,37 +110,68 @@ class DownloadService:
         return self._download_manager.download_tasks
 
     def pause_task(self, task_id: str):
-        for task in self._download_manager.download_tasks:
-            if task.id == task_id:
+        task = self._lookup(task_id)
+        if task is not None:
+            if self._queue_controller is not None:
+                self._queue_controller.pause_download(task)
+            else:
                 self._download_manager.pause_download(task)
-                break
 
     def resume_task(self, task_id: str):
-        for task in self._download_manager.download_tasks:
-            if task.id == task_id:
+        task = self._lookup(task_id)
+        if task is not None:
+            if self._queue_controller is not None:
+                self._queue_controller.resume_download(task)
+            else:
                 self._download_manager.resume_download(task)
-                break
 
     def cancel_task(self, task_id: str):
-        for task in self._download_manager.download_tasks:
-            if task.id == task_id:
+        task = self._lookup(task_id)
+        if task is not None:
+            if self._queue_controller is not None:
+                self._queue_controller.cancel_download(task)
+            else:
                 self._download_manager.cancel_download(task)
-                break
 
     def pause_all(self):
-        self._download_manager.pause_all()
+        if self._queue_controller is not None:
+            self._queue_controller.pause_all()
+        else:
+            self._download_manager.pause_all()
 
     def resume_all(self):
-        self._download_manager.resume_all()
+        if self._queue_controller is not None:
+            self._queue_controller.resume_all()
+        else:
+            self._download_manager.resume_all()
 
     def cancel_all(self):
-        self._download_manager.cancel_all()
+        if self._queue_controller is not None:
+            self._queue_controller.cancel_all()
+        else:
+            self._download_manager.cancel_all()
 
     def clear_completed(self):
-        self._download_manager.clear_completed()
+        if self._queue_controller is not None:
+            return self._queue_controller.clear_completed()
+        return self._download_manager.clear_completed()
 
     def retry_failed(self):
-        self._download_manager.retry_failed()
+        if self._queue_controller is not None:
+            self._queue_controller.retry_failed()
+        else:
+            self._download_manager.retry_failed()
 
     def retry_task(self, task_id: str):
-        self._download_manager.retry_task(task_id)
+        if self._queue_controller is not None:
+            self._queue_controller.retry_download(task_id)
+        else:
+            self._download_manager.retry_task(task_id)
+
+    def _lookup(self, task_id: str) -> DownloadTask | None:
+        manager = (
+            self._queue_controller
+            if self._queue_controller is not None
+            else self._download_manager
+        )
+        return manager.find_task(task_id)
