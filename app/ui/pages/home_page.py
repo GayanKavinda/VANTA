@@ -1,9 +1,10 @@
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
     QDialogButtonBox,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -23,10 +24,25 @@ from app.services.analysis_view import (
     AnalysisViewModel,
     ResourceView,
 )
+from app.services.categorization import categorize_resource
+from app.services.filtering import (
+    FilterMode,
+    ResourceFilter,
+    apply_filter,
+)
+from app.services.grouping import (
+    ResourceGroup,
+    group_resources,
+)
 from app.services.selection import (
     ResourceSelectionController,
     SelectionState,
     resource_id_for,
+)
+from app.services.sorting import (
+    SortMode,
+    SortSpec,
+    sort_resources,
 )
 from app.utils.logger import get_logger
 
@@ -58,7 +74,11 @@ class HomePage(QWidget):
         self._result_area.download_selected_clicked.connect(self._on_download_selected)
         self._result_area.select_all_clicked.connect(self._on_select_all)
         self._result_area.deselect_all_clicked.connect(self._on_deselect_all)
+        self._result_area.select_visible_clicked.connect(self._on_select_visible)
+        self._result_area.deselect_visible_clicked.connect(self._on_deselect_visible)
         self._result_area.details_requested.connect(self._on_details_requested)
+        self._result_area.filter_changed.connect(self._on_filter_changed)
+        self._result_area.sort_changed.connect(self._on_sort_changed)
 
         footer = FooterWidget()
 
@@ -146,6 +166,44 @@ class HomePage(QWidget):
         self._result_area.refresh_selection_toolbar(self._selection.state)
         self._result_area.refresh_row_checkboxes(self._selection)
 
+    def _on_select_visible(self):
+        if not self._current_view:
+            return
+        visible = self._result_area._visible_resource_ids()
+        self._selection.select_visible(visible)
+        self._result_area.refresh_selection_toolbar(self._selection.state)
+        self._result_area.refresh_row_checkboxes(self._selection)
+
+    def _on_deselect_visible(self):
+        if not self._current_view:
+            return
+        visible = self._result_area._visible_resource_ids()
+        self._selection.deselect_visible(visible)
+        self._result_area.refresh_selection_toolbar(self._selection.state)
+        self._result_area.refresh_row_checkboxes(self._selection)
+
+    def _on_filter_changed(self, filter_spec: ResourceFilter):
+        if not self._current_view:
+            return
+        self._result_area.refresh_resources(
+            self._current_view,
+            self._selection,
+        )
+        self._result_area.refresh_selection_toolbar(
+            self._selection.state
+        )
+
+    def _on_sort_changed(self, sort_spec: SortSpec):
+        if not self._current_view:
+            return
+        self._result_area.refresh_resources(
+            self._current_view,
+            self._selection,
+        )
+        self._result_area.refresh_selection_toolbar(
+            self._selection.state
+        )
+
     def _on_download_selected(self):
         if not self._current_source_url or not self._current_view:
             return
@@ -165,8 +223,10 @@ class HomePage(QWidget):
     def show_analysis_view(self, view_model: AnalysisViewModel):
         self._current_view = view_model
         self.set_analyzing(False)
+        self._result_area.reset_controls()
         ids = [resource_id_for(rv) for rv in view_model.resources]
         self._selection.set_eligible(ids)
+        self._selection.deselect_all()
         if view_model.is_error:
             self._result_area.show_error(
                 view_model.title or "Analysis failed",
@@ -189,6 +249,7 @@ class HomePage(QWidget):
         self._current_view = None
         self._selection.set_eligible([])
         self._selection.deselect_all()
+        self._result_area.reset_controls()
         self._result_area.clear()
 
 
@@ -216,12 +277,18 @@ class ResultArea(QWidget):
     download_selected_clicked = Signal()
     select_all_clicked = Signal()
     deselect_all_clicked = Signal()
+    select_visible_clicked = Signal()
+    deselect_visible_clicked = Signal()
     details_requested = Signal(object)
+    filter_changed = Signal(object)
+    sort_changed = Signal(object)
 
     def __init__(self):
         super().__init__()
 
         self._current_url: str | None = None
+        self._filter_spec: ResourceFilter = ResourceFilter(FilterMode.ALL)
+        self._sort_spec: SortSpec = SortSpec(SortMode.RECOMMENDED)
 
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
@@ -248,6 +315,10 @@ class ResultArea(QWidget):
         self._section_title.setObjectName("section_title")
         self._section_title.hide()
         self._layout.addWidget(self._section_title)
+
+        self._control_bar = self._build_control_bar()
+        self._layout.addWidget(self._control_bar)
+        self._control_bar.show()
 
         self._selection_toolbar = self._build_selection_toolbar()
         self._layout.addWidget(self._selection_toolbar)
@@ -362,6 +433,75 @@ class ResultArea(QWidget):
 
         return frame
 
+    def _build_control_bar(self) -> QFrame:
+        frame = QFrame()
+        layout = QHBoxLayout(frame)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        filter_label = QLabel("Filter:")
+        filter_label.setObjectName("section_meta")
+        layout.addWidget(filter_label)
+
+        self._filter_combo = QComboBox()
+        self._filter_combo.addItems(
+            [
+                "All",
+                "High",
+                "Medium",
+                "Low",
+                "File Type",
+            ]
+        )
+        self._filter_combo.setFixedWidth(140)
+        self._filter_combo.currentIndexChanged.connect(self._on_filter_index_changed)
+        layout.addWidget(self._filter_combo)
+
+        self._file_type_combo = QComboBox()
+        self._file_type_combo.addItems(
+            ["zip", "rar", "7z", "tar", "gz", "exe", "msi", "pdf", "txt", "iso", "bin"]
+        )
+        self._file_type_combo.setFixedWidth(130)
+        self._file_type_combo.currentIndexChanged.connect(self._on_file_type_changed)
+        self._file_type_combo.setEnabled(False)
+        layout.addWidget(self._file_type_combo)
+
+        sort_label = QLabel("Sort:")
+        sort_label.setObjectName("section_meta")
+        layout.addWidget(sort_label)
+
+        self._sort_combo = QComboBox()
+        self._sort_combo.addItems(
+            [
+                "Recommended",
+                "Score ↑",
+                "Score ↓",
+                "Size ↑",
+                "Size ↓",
+                "Filename ↑",
+                "Filename ↓",
+            ]
+        )
+        self._sort_combo.setFixedWidth(170)
+        self._sort_combo.currentIndexChanged.connect(self._on_sort_index_changed)
+        layout.addWidget(self._sort_combo)
+
+        layout.addStretch(1)
+
+        self._select_visible_btn = QPushButton("Select Visible")
+        self._select_visible_btn.setObjectName("secondary")
+        self._select_visible_btn.setProperty("size", "small")
+        self._select_visible_btn.clicked.connect(self.select_visible_clicked.emit)
+        layout.addWidget(self._select_visible_btn)
+
+        self._deselect_visible_btn = QPushButton("Deselect Visible")
+        self._deselect_visible_btn.setObjectName("secondary")
+        self._deselect_visible_btn.setProperty("size", "small")
+        self._deselect_visible_btn.clicked.connect(self.deselect_visible_clicked.emit)
+        layout.addWidget(self._deselect_visible_btn)
+
+        return frame
+
     def _build_selection_toolbar(self) -> QFrame:
         frame = QFrame()
         layout = QHBoxLayout(frame)
@@ -394,6 +534,56 @@ class ResultArea(QWidget):
 
         return frame
 
+    def _on_filter_index_changed(self, index: int):
+        mode_map = {
+            0: FilterMode.ALL,
+            1: FilterMode.HIGH,
+            2: FilterMode.MEDIUM,
+            3: FilterMode.LOW,
+            4: FilterMode.FILE_TYPE,
+        }
+        mode = mode_map.get(index, FilterMode.ALL)
+        if mode is FilterMode.FILE_TYPE:
+            self._file_type_combo.setEnabled(True)
+            file_type = self._file_type_combo.currentText()
+            try:
+                self._filter_spec = ResourceFilter(FilterMode.FILE_TYPE, file_type=file_type)
+            except ValueError:
+                self._filter_spec = ResourceFilter(FilterMode.ALL)
+        else:
+            self._file_type_combo.setEnabled(False)
+            try:
+                self._filter_spec = ResourceFilter(mode)
+            except ValueError:
+                self._filter_spec = ResourceFilter(FilterMode.ALL)
+        self.filter_changed.emit(self._filter_spec)
+
+    def _on_file_type_changed(self, index: int):
+        if self._filter_spec.mode is FilterMode.FILE_TYPE:
+            file_type = self._file_type_combo.itemText(index)
+            try:
+                self._filter_spec = ResourceFilter(FilterMode.FILE_TYPE, file_type=file_type)
+            except ValueError:
+                self._filter_spec = ResourceFilter(FilterMode.ALL)
+            self.filter_changed.emit(self._filter_spec)
+
+    def _on_sort_index_changed(self, index: int):
+        sort_map = {
+            0: SortMode.RECOMMENDED,
+            1: SortMode.SCORE_ASC,
+            2: SortMode.SCORE_DESC,
+            3: SortMode.SIZE_ASC,
+            4: SortMode.SIZE_DESC,
+            5: SortMode.FILENAME_ASC,
+            6: SortMode.FILENAME_DESC,
+        }
+        mode = sort_map.get(index, SortMode.RECOMMENDED)
+        try:
+            self._sort_spec = SortSpec(mode)
+        except TypeError:
+            self._sort_spec = SortSpec(SortMode.RECOMMENDED)
+        self.sort_changed.emit(self._sort_spec)
+
     def clear(self):
         self._loading.hide()
         self._error.hide()
@@ -418,22 +608,73 @@ class ResultArea(QWidget):
         )
         self._section_title.setText(title_text)
         self._section_title.show()
+        self._render_resources(vm, selection)
+
+    def refresh_resources(
+        self,
+        vm: AnalysisViewModel,
+        selection: ResourceSelectionController,
+    ):
+        self._render_resources(vm, selection)
+
+    def reset_controls(self):
+        self._filter_spec = ResourceFilter(FilterMode.ALL)
+        self._sort_spec = SortSpec(SortMode.RECOMMENDED)
+
+        self._filter_combo.blockSignals(True)
+        self._sort_combo.blockSignals(True)
+
+        self._filter_combo.setCurrentIndex(0)
+        self._sort_combo.setCurrentIndex(0)
+
+        self._filter_combo.blockSignals(False)
+        self._sort_combo.blockSignals(False)
+
+        self._file_type_combo.setEnabled(False)
+
+    def _render_resources(
+        self,
+        vm: AnalysisViewModel,
+        selection: ResourceSelectionController,
+    ):
+        # V1.9 pipeline: Filter → Sort → Group (presentation only).
+        filtered = apply_filter(vm.resources, self._filter_spec)
+        sorted_view = sort_resources(filtered, self._sort_spec)
+        grouped = group_resources(sorted_view)
 
         self._resource_list.clear()
         self._resource_rows = []
-        for rv in vm.resources:
-            item = QListWidgetItem(self._resource_list)
-            row = ResourceRow(rv)
-            item.setSizeHint(row.sizeHint())
-            self._resource_list.addItem(item)
-            self._resource_list.setItemWidget(item, row)
 
-            row.download_clicked.connect(lambda checked=False, r=rv: self.download_clicked.emit(r))
-            row.selection_changed.connect(self.selection_changed.emit)
-            row.details_clicked.connect(self.details_requested.emit)
-            self._resource_rows.append(row)
+        for group, label in (
+            (grouped.main, "Main"),
+            (grouped.optional, "Optional"),
+            (grouped.other, "Other"),
+        ):
+            if not group:
+                continue
+            header_item = QListWidgetItem(self._resource_list)
+            header_item.setData(Qt.UserRole, "group_header")
+            header_item.setSizeHint(QSize(0, 22))
+            self._resource_list.addItem(header_item)
+            header_label = QLabel(label.upper())
+            header_label.setObjectName("section_meta")
+            self._resource_list.setItemWidget(header_item, header_label)
+
+            for rv in group:
+                item = QListWidgetItem(self._resource_list)
+                row = ResourceRow(rv)
+                item.setSizeHint(row.sizeHint())
+                self._resource_list.addItem(item)
+                self._resource_list.setItemWidget(item, row)
+
+                row.download_clicked.connect(lambda checked=False, r=rv: self.download_clicked.emit(r))
+                row.selection_changed.connect(self.selection_changed.emit)
+                row.details_clicked.connect(self.details_requested.emit)
+
+                self._resource_rows.append(row)
 
         self._resource_list.show()
+        self._control_bar.show()
         self._selection_toolbar.show()
         self.refresh_selection_toolbar(selection.state)
         self.refresh_row_checkboxes(selection)
@@ -474,6 +715,15 @@ class ResultArea(QWidget):
     def refresh_row_checkboxes(self, selection: ResourceSelectionController):
         for row in self._resource_rows:
             row.set_checked(selection.is_selected(row.resource_id))
+
+    def _visible_resource_ids(self) -> list[str]:
+        """Return the resource IDs currently visible in the list.
+
+        Used by `Select Visible` / `Deselect Visible`. The list is
+        populated by `show_view_model`, which applies the current
+        filter/sort/group pipeline.
+        """
+        return [row.resource_id for row in self._resource_rows]
 
     def set_current_url(self, url: str):
         self._current_url = url
@@ -574,7 +824,9 @@ class ResourceRow(QFrame):
 
     def set_checked(self, checked: bool):
         if self._checkbox.isChecked() != checked:
+            self._checkbox.blockSignals(True)
             self._checkbox.setChecked(checked)
+            self._checkbox.blockSignals(False)
 
     def _on_checkbox_toggled(self, checked: bool):
         self.selection_changed.emit(self._resource_id, checked)

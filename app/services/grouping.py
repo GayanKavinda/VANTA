@@ -17,9 +17,10 @@ Hard rules:
 
 Group assignments (defaults):
   * MAIN     — INSTALLER (high/medium confidence), ARCHIVE, PART
-  * OPTIONAL — PATCH, INSTALLER (low confidence), medium-confidence
-               high-score resources
-  * OTHER    — DOCUMENTATION, UNKNOWN, REJECTED confidence
+  * OPTIONAL — PATCH, INSTALLER (low confidence), UNKNOWN
+               with HIGH confidence and score >= 60
+  * OTHER    — DOCUMENTATION, remaining UNKNOWN resources,
+               REJECTED confidence
 """
 from __future__ import annotations
 
@@ -53,14 +54,6 @@ class GroupedResources:
             ResourceGroup.OPTIONAL: list(self.optional),
             ResourceGroup.OTHER: list(self.other),
         }
-
-
-def _is_primary_category(category: ResourceCategory) -> bool:
-    return category in {
-        ResourceCategory.INSTALLER,
-        ResourceCategory.ARCHIVE,
-        ResourceCategory.PART,
-    }
 
 
 def _assign_group(view: ResourceView, category: ResourceCategory) -> ResourceGroup:
