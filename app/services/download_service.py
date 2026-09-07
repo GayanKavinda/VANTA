@@ -27,8 +27,15 @@ class DownloadService:
     def download_manager(self) -> DownloadManager:
         return self._download_manager
 
+    @property
+    def analyzer(self) -> AnalyzerService:
+        return self._analyzer
+
     async def analyze_url(self, url: str) -> AnalysisResult:
         return await self._analyzer.analyze(url)
+
+    async def analyze_url_with_context(self, url: str):
+        return await self._analyzer.analyze_with_context(url)
 
     async def start_download(
         self,
@@ -56,6 +63,17 @@ class DownloadService:
         file: DownloadFile,
         destination: str | Path | None = None,
     ) -> DownloadTask:
+        from app.core.models import ResolvedResource
+        if isinstance(file, ResolvedResource):
+            resolved: ResolvedResource = file
+            resolved_file = DownloadFile(
+                name=resolved.filename or "download",
+                url=resolved.final_url,
+                size=resolved.size,
+                content_type=resolved.content_type,
+            )
+            file = resolved_file
+
         dest_dir = Path(destination) if destination else self._file_manager.default_dir
         filename = self._file_manager.safe_join(file.name)
         dest_path = self._file_manager.get_unique_path(filename, dest_dir)

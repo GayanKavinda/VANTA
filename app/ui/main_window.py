@@ -87,6 +87,7 @@ class MainWindow(QMainWindow):
 
     def _connect_signals(self):
         self.home_page.url_analyzed.connect(self._on_url_analyzed)
+        self.home_page.download_requested.connect(self._on_download_requested)
         self._create_actions()
 
     def _create_actions(self):
@@ -138,7 +139,7 @@ class MainWindow(QMainWindow):
         )
 
         if reply == QMessageBox.Yes:
-            for task in tasks:
+            for task in interrupted_tasks:
                 self._app_state.download_manager.resume_download(task)
             self.stacked_widget.setCurrentIndex(1)
             self.sidebar.set_active(1)
@@ -149,7 +150,7 @@ class MainWindow(QMainWindow):
 
     def _on_url_analyzed(self, url: str):
         self.home_page.set_current_url_for_result(url)
-        asyncio.create_task(self._analyze_and_start(url))
+        asyncio.create_task(self._analyze_only(url))
 
     def _on_settings_changed(self, key: str, value: str):
         log.info("Setting changed: %s = %s", key, value)
@@ -166,25 +167,39 @@ class MainWindow(QMainWindow):
             if self._settings.get_bool("speed_limit_enabled"):
                 self._app_state.download_manager.set_speed_limit(int(value) * 1024 * 1024)
 
-    async def _analyze_and_start(self, url: str):
+    async def _analyze_only(self, url: str):
         try:
-            result = await self._download_service.analyze_url(url)
-            self.home_page.show_analysis_result(result)
+            from app.services.analysis_view import build_view_model
 
-            if result.status == "ready" and result.files:
-                task = await self._download_service.start_download(url, result=result)
-                if task:
-                    self.stacked_widget.setCurrentIndex(1)
-                    self.sidebar.set_active(1)
-                    log.info("Download started: %s", task.id)
-            elif result.status in ("unsupported", "error"):
-                log.warning("Source not supported or analysis failed for URL: %s", url)
+            result, context = await self._download_service.analyze_url_with_context(url)
+            view_model = build_view_model(result, context)
+            self.home_page.show_analysis_view(view_model, result)
 
         except Exception as e:
             log.error("Failed to analyze URL: %s", e, exc_info=True)
             self.home_page.show_error(
                 "Analysis Failed",
                 "Could not process this URL. Check the logs for details.",
+            )
+
+    def _on_download_requested(self, source_url: str, resource_view):
+        asyncio.create_task(self._start_resource_download(source_url, resource_view))
+
+    async def _start_resource_download(self, source_url: str, resource_view):
+        try:
+            task = await self._download_service.start_file_download(
+                source_url=source_url,
+                file=resource_view.file,
+            )
+            if task:
+                self.stacked_widget.setCurrentIndex(1)
+                self.sidebar.set_active(1)
+                log.info("Download started: %s -> %s", task.id, task.name)
+        except Exception as e:
+            log.error("Failed to start download: %s", e, exc_info=True)
+            self.home_page.show_error(
+                "Download Failed",
+                "Could not start this download. Check the logs.",
             )
 
     def closeEvent(self, event):

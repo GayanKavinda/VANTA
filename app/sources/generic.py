@@ -2,7 +2,7 @@ from urllib.parse import urljoin
 
 import httpx
 
-from app.core.models import AnalysisResult, DownloadFile
+from app.core.models import AnalysisResult, DownloadFile, ResolvedResource
 from app.sources.base import BaseSourceAdapter
 from app.services.resolver import Resolver
 from app.services.url_security import validate_url
@@ -54,6 +54,7 @@ class GenericSourceAdapter(BaseSourceAdapter):
         )
         self._allow_private = allow_private_networks
         self._blocked_hosts = tuple(blocked_hosts)
+        self._last_resolutions: list[ResolvedResource] = []
 
     @property
     def name(self) -> str:
@@ -64,6 +65,9 @@ class GenericSourceAdapter(BaseSourceAdapter):
         if not lowered:
             return False
         return lowered.startswith(("http://", "https://"))
+
+    def last_resolutions(self) -> list[ResolvedResource]:
+        return list(self._last_resolutions)
 
     async def analyze(self, url: str) -> AnalysisResult:
         decision = validate_url(
@@ -164,6 +168,7 @@ class GenericSourceAdapter(BaseSourceAdapter):
             combined.append(c)
 
         resolved = await self._resolver.resolve_candidates(combined)
+        self._last_resolutions = list(resolved)
 
         files: list[DownloadFile] = []
         for r in resolved:
