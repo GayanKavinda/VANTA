@@ -230,10 +230,122 @@ async def test_direct_adapter_does_not_consume_full_file(head_server):
 
 
 def test_direct_adapter_filename_from_url_path():
-    fn = DirectDownloadAdapter._extract_filename("", "https://example.com/files/game%20v2.zip")
+    from app.sources.http_headers import extract_filename_from_url
+    fn = extract_filename_from_url("https://example.com/files/game%20v2.zip")
     assert fn == "game v2.zip"
 
 
 def test_direct_adapter_filename_fallback():
-    fn = DirectDownloadAdapter._extract_filename("", "https://example.com/")
-    assert fn == "download"
+    from app.sources.http_headers import extract_filename_from_url
+    fn = extract_filename_from_url("https://example.com/")
+    assert fn is None
+
+
+def test_direct_adapter_filename_plain():
+    from app.sources.http_headers import extract_filename_from_content_disposition
+    fn = extract_filename_from_content_disposition('attachment; filename="plain.zip"')
+    assert fn == "plain.zip"
+
+
+def test_direct_adapter_filename_rfc5987_encoded():
+    from app.sources.http_headers import extract_filename_from_content_disposition
+    cd = "attachment; filename*=UTF-8''game%20archive.zip"
+    fn = extract_filename_from_content_disposition(cd)
+    assert fn == "game archive.zip"
+
+
+def test_direct_adapter_filename_prefers_filename_star_over_plain():
+    from app.sources.http_headers import extract_filename_from_content_disposition
+    cd = "attachment; filename=\"plain.zip\"; filename*=UTF-8''encoded.zip"
+    fn = extract_filename_from_content_disposition(cd)
+    assert fn == "encoded.zip"
+
+
+def test_direct_adapter_can_handle_webpages_with_download_word():
+    adapter = DirectDownloadAdapter()
+    assert adapter.can_handle("https://example.com/articles/how-to-download-games") is False
+    assert adapter.can_handle("https://example.com/page?file=information") is False
+    assert adapter.can_handle("https://example.com/download-page") is False
+
+
+def test_direct_adapter_can_handle_extension_still_works():
+    adapter = DirectDownloadAdapter()
+    assert adapter.can_handle("https://example.com/files/game.zip") is True
+    assert adapter.can_handle("https://example.com/manual.pdf") is True
+    assert adapter.can_handle("https://example.com/download/game.iso") is True
+
+
+@pytest.mark.asyncio
+async def test_direct_adapter_handles_malformed_content_length():
+    import httpx
+
+    real_response = httpx.Response(
+        200,
+        headers={
+            "content-disposition": 'attachment; filename="x.zip"',
+            "content-length": "unknown",
+            "content-type": "application/zip",
+        },
+        request=httpx.Request("HEAD", "https://example.com/file.zip"),
+    )
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def head(self, url, **kwargs):
+            return real_response
+
+    original_client = httpx.AsyncClient
+    httpx.AsyncClient = FakeClient
+    try:
+        result = await DirectDownloadAdapter().analyze("https://example.com/file.zip")
+    finally:
+        httpx.AsyncClient = original_client
+
+    assert result.status == "ready"
+    assert result.files[0].size is None
+    assert result.files[0].name == "x.zip"
+
+
+@pytest.mark.asyncio
+async def test_direct_adapter_handles_negative_content_length():
+    import httpx
+
+    real_response = httpx.Response(
+        200,
+        headers={
+            "content-disposition": 'attachment; filename="x.zip"',
+            "content-length": "-5",
+            "content-type": "application/zip",
+        },
+        request=httpx.Request("HEAD", "https://example.com/file.zip"),
+    )
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def head(self, url, **kwargs):
+            return real_response
+
+    original_client = httpx.AsyncClient
+    httpx.AsyncClient = FakeClient
+    try:
+        result = await DirectDownloadAdapter().analyze("https://example.com/file.zip")
+    finally:
+        httpx.AsyncClient = original_client
+
+    assert result.files[0].size is None

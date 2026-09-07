@@ -6,6 +6,7 @@ from app.sources.link_classifier import (
     is_fragment_only,
     is_ignored_scheme,
 )
+import app.sources.link_classifier as lc
 
 
 def test_is_ignored_scheme_javascript():
@@ -138,3 +139,7 @@ def test_deduplicate_keeps_order_with_dupes():
 def test_deduplicate_skips_empty():
     urls = ["", "a", "", "b"]
     assert deduplicate_preserve_order(urls) == ["a", "b"]
+
+
+def test_normalize_url_removed():
+    assert not hasattr(lc, "normalize_url")

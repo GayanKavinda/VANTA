@@ -1,5 +1,9 @@
 from typing import Optional
-from urllib.parse import unquote, urlparse
+
+from app.sources.http_headers import (
+    extract_filename_from_url as _extract_filename_from_url,
+    has_download_extension as _has_download_extension,
+)
 
 
 DOWNLOAD_EXTENSIONS = (
@@ -51,32 +55,11 @@ def is_fragment_only(url: str) -> bool:
 
 
 def extract_filename_from_url(url: str) -> Optional[str]:
-    if not url:
-        return None
-
-    parsed = urlparse(url)
-    path = unquote(parsed.path or "")
-    if not path:
-        return None
-
-    name = path.rsplit("/", 1)[-1].strip()
-    if not name:
-        return None
-
-    return name
+    return _extract_filename_from_url(url)
 
 
 def has_download_extension(url: str) -> bool:
-    name = extract_filename_from_url(url)
-    if not name:
-        return False
-
-    lowered = name.lower()
-    for ext in DOWNLOAD_EXTENSIONS:
-        if lowered.endswith(ext):
-            return True
-
-    return False
+    return _has_download_extension(url)
 
 
 def is_download_candidate(url: str) -> bool:
@@ -90,12 +73,6 @@ def is_download_candidate(url: str) -> bool:
         return False
 
     return has_download_extension(url)
-
-
-def normalize_url(url: str) -> str:
-    if not url:
-        return url
-    return url.strip()
 
 
 def deduplicate_preserve_order(urls: list[str]) -> list[str]:

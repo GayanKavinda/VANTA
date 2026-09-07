@@ -11,6 +11,18 @@ class DownloadFile:
 
 
 @dataclass
+class ResourceProbeResult:
+    url: str
+    final_url: str
+    status_code: int
+    content_type: Optional[str] = None
+    size: Optional[int] = None
+    filename: Optional[str] = None
+    supports_range: Optional[bool] = None
+    is_downloadable: bool = False
+
+
+@dataclass
 class AnalysisResult:
     title: str
     source: str
