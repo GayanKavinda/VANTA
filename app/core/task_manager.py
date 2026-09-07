@@ -75,7 +75,7 @@ class DownloadTask:
         self.downloaded_size = downloaded
         if total > 0:
             self.total_size = total
-            self.progress = round((downloaded / total) * 100, 1)
+            self.progress = min(100.0, max(0.0, round((downloaded / total) * 100, 1)))
         self.speed = speed
         self.updated_at = time.time()
 

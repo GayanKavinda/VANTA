@@ -78,13 +78,27 @@ def load_download_tasks() -> list[DownloadTask]:
         records = session.query(DownloadRecord).all()
         tasks = []
         for r in records:
+            try:
+                status = TaskStatus(r.status)
+            except ValueError:
+                status = TaskStatus.QUEUED
+
+            try:
+                error_type = (
+                    DownloadErrorType(r.error_type)
+                    if r.error_type
+                    else DownloadErrorType.UNKNOWN
+                )
+            except ValueError:
+                error_type = DownloadErrorType.UNKNOWN
+
             task = DownloadTask(
                 id=r.id,
                 name=r.name,
                 source_url=r.source_url,
                 download_url=r.download_url or "",
                 destination=r.destination or "",
-                status=TaskStatus(r.status),
+                status=status,
                 total_size=r.total_size,
                 downloaded_size=r.downloaded_size,
                 speed=r.speed,
@@ -92,7 +106,7 @@ def load_download_tasks() -> list[DownloadTask]:
                 created_at=r.created_at,
                 updated_at=r.updated_at,
                 error=r.error,
-                error_type=DownloadErrorType(r.error_type) if r.error_type else DownloadErrorType.UNKNOWN,
+                error_type=error_type,
                 supports_resume=bool(r.supports_resume),
                 queue_order=r.queue_order or 0,
             )

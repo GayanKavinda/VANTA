@@ -176,15 +176,25 @@ class DownloadsPage(QWidget):
 
     def _on_clear_completed(self):
         if self._download_service:
-            self._download_service.clear_completed()
+            removed_ids = self._download_service.clear_completed()
+        else:
+            removed_ids = []
+
         manager = self._get_manager()
         if manager is None:
             return
+
+        for task_id in removed_ids:
+            card = self._cards.pop(task_id, None)
+            if card is not None:
+                card.deleteLater()
+
         for task_id in list(self._cards.keys()):
             task = manager.find_task(task_id)
-            if task is None or task.is_terminal:
+            if task is not None and task.status == TaskStatus.COMPLETED:
                 card = self._cards.pop(task_id)
                 card.deleteLater()
+
         if not self._cards:
             self._placeholder.setVisible(True)
         self._update_summary()

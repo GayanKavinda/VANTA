@@ -736,3 +736,155 @@ def test_queue_order_restored(tmp_path):
             db.commit()
         finally:
             db.close()
+
+
+def test_set_status_emits_changed_queue_tasks(queue_manager):
+    a = DownloadTask(
+        id="emit_a",
+        name="a.bin",
+        source_url="http://example.com/a.bin",
+        download_url="http://example.com/a.bin",
+        destination="/tmp/a.bin",
+        status=TaskStatus.QUEUED,
+        queue_order=1,
+    )
+    b = DownloadTask(
+        id="emit_b",
+        name="b.bin",
+        source_url="http://example.com/b.bin",
+        download_url="http://example.com/b.bin",
+        destination="/tmp/b.bin",
+        status=TaskStatus.QUEUED,
+        queue_order=2,
+    )
+    queue_manager._download_tasks.extend([a, b])
+    queue_manager._update_queue_positions()
+
+    emitted = []
+    queue_manager.add_progress_callback(lambda t: emitted.append(t))
+
+    queue_manager._set_status(a, TaskStatus.DOWNLOADING)
+
+    assert a in emitted
+    assert b in emitted
+    assert b.queue_position == 1
+    assert b.queue_order == 1
+
+    queue_manager.remove_progress_callback(lambda t: emitted.append(t))
+
+
+def test_clear_completed_returns_removed_ids(queue_manager):
+    completed = DownloadTask(
+        id="clr_ret_a",
+        name="a.bin",
+        source_url="http://example.com/a.bin",
+        download_url="http://example.com/a.bin",
+        destination="/tmp/a.bin",
+        status=TaskStatus.COMPLETED,
+    )
+    failed = DownloadTask(
+        id="clr_ret_b",
+        name="b.bin",
+        source_url="http://example.com/b.bin",
+        download_url="http://example.com/b.bin",
+        destination="/tmp/b.bin",
+        status=TaskStatus.FAILED,
+    )
+    queue_manager._download_tasks.extend([completed, failed])
+
+    removed = queue_manager.clear_completed()
+
+    assert removed == ["clr_ret_a"]
+    assert len(queue_manager.download_tasks) == 1
+    assert queue_manager.download_tasks[0].id == "clr_ret_b"
+
+
+def test_cancel_download_skips_terminal_task(queue_manager):
+    task = DownloadTask(
+        id="cancel_term",
+        name="a.bin",
+        source_url="http://example.com/a.bin",
+        download_url="http://example.com/a.bin",
+        destination="/tmp/a.bin",
+        status=TaskStatus.FAILED,
+    )
+    queue_manager._download_tasks.append(task)
+
+    queue_manager.cancel_download(task)
+
+    assert task.status == TaskStatus.FAILED
+
+
+@pytest.mark.asyncio
+async def test_retry_excludes_range_unsupported(queue_manager):
+    task = DownloadTask(
+        id="retry_range",
+        name="a.bin",
+        source_url="http://example.com/a.bin",
+        download_url="http://example.com/a.bin",
+        destination="/tmp/a.bin",
+        status=TaskStatus.FAILED,
+        error_type=DownloadErrorType.RANGE_UNSUPPORTED,
+        supports_resume=True,
+    )
+    queue_manager._download_tasks.append(task)
+
+    queue_manager.retry_task("retry_range")
+
+    assert task.status == TaskStatus.QUEUED
+    assert task.supports_resume is False
+    assert task.error is None
+
+
+def test_restore_tasks_does_not_mutate_input(queue_manager):
+    a = DownloadTask(
+        id="mut_a",
+        name="a.bin",
+        source_url="http://example.com/a.bin",
+        download_url="http://example.com/a.bin",
+        destination="/tmp/a.bin",
+        status=TaskStatus.QUEUED,
+        queue_order=2,
+    )
+    b = DownloadTask(
+        id="mut_b",
+        name="b.bin",
+        source_url="http://example.com/b.bin",
+        download_url="http://example.com/b.bin",
+        destination="/tmp/b.bin",
+        status=TaskStatus.QUEUED,
+        queue_order=1,
+    )
+    input_tasks = [a, b]
+
+    queue_manager.restore_tasks(input_tasks)
+
+    assert input_tasks[0].id == "mut_a"
+    assert input_tasks[1].id == "mut_b"
+
+
+def test_restore_tasks_is_idempotent(queue_manager):
+    a = DownloadTask(
+        id="idem_a",
+        name="a.bin",
+        source_url="http://example.com/a.bin",
+        download_url="http://example.com/a.bin",
+        destination="/tmp/a.bin",
+        status=TaskStatus.QUEUED,
+        queue_order=1,
+    )
+    b = DownloadTask(
+        id="idem_b",
+        name="b.bin",
+        source_url="http://example.com/b.bin",
+        download_url="http://example.com/b.bin",
+        destination="/tmp/b.bin",
+        status=TaskStatus.QUEUED,
+        queue_order=2,
+    )
+    input_tasks = [a, b]
+
+    queue_manager.restore_tasks(input_tasks)
+    queue_manager.restore_tasks(input_tasks)
+
+    assert len(queue_manager.download_tasks) == 2

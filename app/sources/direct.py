@@ -1,3 +1,5 @@
+import os
+
 from app.core.models import AnalysisResult, DownloadFile
 from app.sources.base import BaseSourceAdapter
 
@@ -22,16 +24,17 @@ class DirectDownloadAdapter(BaseSourceAdapter):
         ) or "download" in lowered or "file=" in lowered
 
     async def analyze(self, url: str) -> AnalysisResult:
-        import httpx
-        import os
-
         async with httpx.AsyncClient(follow_redirects=True) as client:
             response = await client.head(url, timeout=httpx.Timeout(30))
 
             if response.status_code == 405:
-                response = await client.get(url, timeout=httpx.Timeout(30), stream=True)
-                await response.aread(4096)
-                response.close()
+                async with client.stream(
+                    "GET",
+                    url,
+                    timeout=httpx.Timeout(30),
+                ) as response:
+                    async for _ in response.aiter_bytes(4096):
+                        pass
 
         content_disposition = response.headers.get("content-disposition", "")
         filename = self._extract_filename(content_disposition, url)

@@ -161,3 +161,68 @@ def test_error_type_persisted():
     loaded = load_download_tasks()
     assert len(loaded) == 1
     assert loaded[0].error_type == DownloadErrorType.ACCESS_DENIED
+
+
+def test_load_download_tasks_handles_invalid_status(tmp_path):
+    task = DownloadTask(
+        id="inv_status",
+        name="a.bin",
+        source_url="http://example.com/a.bin",
+        download_url="http://example.com/a.bin",
+        destination=str(tmp_path / "a.bin"),
+        status=TaskStatus.QUEUED,
+    )
+    save_download_task(task)
+
+    try:
+        db = get_session()
+        try:
+            record = db.query(DownloadRecord).filter_by(id="inv_status").first()
+            record.status = "invalid_status"
+            db.commit()
+        finally:
+            db.close()
+
+        loaded = load_download_tasks()
+        assert len(loaded) == 1
+        assert loaded[0].status == TaskStatus.QUEUED
+    finally:
+        db = get_session()
+        try:
+            db.query(DownloadRecord).filter_by(id="inv_status").delete()
+            db.commit()
+        finally:
+            db.close()
+
+
+def test_load_download_tasks_handles_invalid_error_type(tmp_path):
+    task = DownloadTask(
+        id="inv_err",
+        name="a.bin",
+        source_url="http://example.com/a.bin",
+        download_url="http://example.com/a.bin",
+        destination=str(tmp_path / "a.bin"),
+        status=TaskStatus.FAILED,
+        error_type=DownloadErrorType.ACCESS_DENIED,
+    )
+    save_download_task(task)
+
+    try:
+        db = get_session()
+        try:
+            record = db.query(DownloadRecord).filter_by(id="inv_err").first()
+            record.error_type = "invalid_error"
+            db.commit()
+        finally:
+            db.close()
+
+        loaded = load_download_tasks()
+        assert len(loaded) == 1
+        assert loaded[0].error_type == DownloadErrorType.UNKNOWN
+    finally:
+        db = get_session()
+        try:
+            db.query(DownloadRecord).filter_by(id="inv_err").delete()
+            db.commit()
+        finally:
+            db.close()

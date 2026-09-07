@@ -105,9 +105,13 @@ class DownloadCard(QFrame):
         self._size_label.setText(self._format_size(task))
         self._speed_label.setText(self._format_speed(task.speed))
 
-        self._button_row.removeWidget(self._pause_btn)
-        self._button_row.removeWidget(self._cancel_btn)
-        self._button_row.removeWidget(self._retry_btn)
+        for button in (
+            self._pause_btn,
+            self._resume_btn,
+            self._cancel_btn,
+            self._retry_btn,
+        ):
+            self._button_row.removeWidget(button)
 
         if task.status == TaskStatus.QUEUED:
             pos = task.queue_position

@@ -1,4 +1,4 @@
-from app.core.models import AnalysisResult, DownloadFile, DownloadError
+from app.core.models import AnalysisResult
 from app.sources.base import BaseSourceAdapter
 
 

@@ -130,6 +130,9 @@ class ResultArea(QWidget):
 
         self._current_url: str | None = None
 
+        self._open_btn.clicked.connect(self._open_in_browser)
+        self._copy_btn.clicked.connect(self._copy_url)
+
         self._layout.addWidget(self._status_label)
         self._layout.addLayout(self._action_buttons)
         self._layout.addStretch(1)
@@ -171,9 +174,6 @@ class ResultArea(QWidget):
 
         self._action_buttons.addWidget(self._open_btn)
         self._action_buttons.addWidget(self._copy_btn)
-
-        self._open_btn.clicked.connect(self._open_in_browser)
-        self._copy_btn.clicked.connect(self._copy_url)
 
     def set_current_url(self, url: str):
         self._current_url = url

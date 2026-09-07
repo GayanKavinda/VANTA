@@ -55,20 +55,28 @@ class DownloadManager:
         task.status = status
         task.error = error
         task.updated_at = time.time()
+        changed_queue_tasks = self._update_queue_positions()
         self._emit_progress(task)
-        self._update_queue_positions()
+        for t in changed_queue_tasks:
+            if t.id != task.id:
+                self._emit_progress(t)
 
     def _update_queue_positions(self):
+        changed = []
         queued = [
             t for t in self._download_tasks
             if t.status == TaskStatus.QUEUED
         ]
         for idx, task in enumerate(queued, start=1):
-            task.queue_position = idx
-            task.queue_order = idx
+            if task.queue_position != idx or task.queue_order != idx:
+                task.queue_position = idx
+                task.queue_order = idx
+                changed.append(task)
         for task in self._download_tasks:
-            if task.status != TaskStatus.QUEUED:
+            if task.status != TaskStatus.QUEUED and task.queue_position != 0:
                 task.queue_position = 0
+                changed.append(task)
+        return changed
 
     def get_queue_position(self, task_id: str) -> int:
         task = self.find_task(task_id)
@@ -118,7 +126,10 @@ class DownloadManager:
             self._download_tasks.append(task)
 
         self._emit_progress(task)
-        self._update_queue_positions()
+        changed = self._update_queue_positions()
+        for t in changed:
+            if t.id != task.id:
+                self._emit_progress(t)
 
         asyncio_task = asyncio.create_task(self._run(task))
         self._tasks[task.id] = asyncio_task
@@ -184,6 +195,7 @@ class DownloadManager:
                         task.supports_resume = True
                     elif response.status_code == 200 and resume_position > 0:
                         task.error_type = DownloadErrorType.RANGE_UNSUPPORTED
+                        task.supports_resume = False
                         log.warning(
                             "Server does not support Range requests (returned 200). "
                             "Restarting download from zero."
@@ -327,6 +339,9 @@ class DownloadManager:
             self._tasks[task.id] = asyncio_task
 
     def cancel_download(self, task: DownloadTask):
+        if task.is_terminal:
+            return
+
         self._set_status(task, TaskStatus.CANCELLED, "Download was cancelled")
         asyncio_task = self._tasks.get(task.id)
         if asyncio_task and not asyncio_task.done():
@@ -362,12 +377,20 @@ class DownloadManager:
             if not task.is_terminal:
                 self.cancel_download(task)
 
-    def clear_completed(self):
+    def clear_completed(self) -> list[str]:
+        removed_ids = [
+            t.id
+            for t in self._download_tasks
+            if t.status == TaskStatus.COMPLETED
+        ]
         self._download_tasks = [
             t for t in self._download_tasks
             if t.status != TaskStatus.COMPLETED
         ]
-        self._update_queue_positions()
+        changed = self._update_queue_positions()
+        for t in changed:
+            self._emit_progress(t)
+        return removed_ids
 
     def retry_task(self, task_id: str):
         task = self.find_task(task_id)
@@ -387,8 +410,11 @@ class DownloadManager:
         can_resume = (
             has_part
             and task.supports_resume
-            and task.error_type != DownloadErrorType.HTML_RESPONSE
-            and task.error_type != DownloadErrorType.ACCESS_DENIED
+            and task.error_type not in (
+                DownloadErrorType.HTML_RESPONSE,
+                DownloadErrorType.ACCESS_DENIED,
+                DownloadErrorType.RANGE_UNSUPPORTED,
+            )
         )
 
         if can_resume:
@@ -411,7 +437,11 @@ class DownloadManager:
             self._tasks[task.id] = asyncio_task
 
     def restore_tasks(self, tasks: list[DownloadTask]):
-        tasks.sort(
+        if self._download_tasks:
+            return []
+
+        ordered_tasks = sorted(
+            tasks,
             key=lambda t: (
                 0 if t.status == TaskStatus.QUEUED else 1,
                 t.queue_order if t.queue_order > 0 else 999999,
@@ -420,7 +450,7 @@ class DownloadManager:
         )
 
         interrupted_tasks = []
-        for task in tasks:
+        for task in ordered_tasks:
             if task.status in (
                 TaskStatus.DOWNLOADING,
                 TaskStatus.PREPARING,
