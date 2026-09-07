@@ -144,7 +144,7 @@ def slow_server(tmp_path_factory):
 
 @pytest.fixture
 def queue_manager():
-    return DownloadManager(max_concurrent=1)
+    return DownloadManager(max_concurrent=1, allow_private_networks=True)
 
 
 async def _wait(task, status, timeout=10.0):
@@ -717,7 +717,7 @@ def test_queue_order_restored(tmp_path):
 
     try:
         loaded = load_download_tasks()
-        dm = DownloadManager(max_concurrent=1)
+        dm = DownloadManager(max_concurrent=1, allow_private_networks=True)
         dm.restore_tasks(loaded)
 
         queued = [t for t in dm.download_tasks if t.status == TaskStatus.QUEUED]

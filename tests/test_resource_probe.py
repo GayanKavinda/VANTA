@@ -229,7 +229,7 @@ def probe_redirect_server(tmp_path_factory):
 
 @pytest.mark.asyncio
 async def test_probe_head_success(probe_server):
-    probe = ResourceProbe()
+    probe = ResourceProbe(allow_private_networks=True)
     result = await probe.probe(probe_server["url"])
     assert result.status_code == 200
     assert result.is_downloadable is True
@@ -237,28 +237,28 @@ async def test_probe_head_success(probe_server):
 
 @pytest.mark.asyncio
 async def test_probe_captures_content_type(probe_server):
-    probe = ResourceProbe()
+    probe = ResourceProbe(allow_private_networks=True)
     result = await probe.probe(probe_server["url"])
     assert "application/zip" in (result.content_type or "").lower()
 
 
 @pytest.mark.asyncio
 async def test_probe_captures_content_length(probe_server):
-    probe = ResourceProbe()
+    probe = ResourceProbe(allow_private_networks=True)
     result = await probe.probe(probe_server["url"])
     assert result.size == probe_server["size"]
 
 
 @pytest.mark.asyncio
 async def test_probe_filename_from_content_disposition(probe_server):
-    probe = ResourceProbe()
+    probe = ResourceProbe(allow_private_networks=True)
     result = await probe.probe(probe_server["url"])
     assert result.filename == "server.zip"
 
 
 @pytest.mark.asyncio
 async def test_probe_accept_ranges_bytes(probe_server):
-    probe = ResourceProbe()
+    probe = ResourceProbe(allow_private_networks=True)
     result = await probe.probe(probe_server["url"])
     assert result.supports_range is True
 
@@ -273,7 +273,7 @@ async def test_probe_handles_malformed_content_length():
 
     server, original_chdir = _start_simple_server(18610, _H)
     try:
-        result = await ResourceProbe().probe("http://127.0.0.1:18610/anything")
+        result = await ResourceProbe(allow_private_networks=True).probe("http://127.0.0.1:18610/anything")
         assert result.size is None
     finally:
         server.shutdown()
@@ -290,7 +290,7 @@ async def test_probe_handles_negative_content_length():
 
     server, original_chdir = _start_simple_server(18611, _H)
     try:
-        result = await ResourceProbe().probe("http://127.0.0.1:18611/anything")
+        result = await ResourceProbe(allow_private_networks=True).probe("http://127.0.0.1:18611/anything")
         assert result.size is None
     finally:
         server.shutdown()
@@ -307,7 +307,7 @@ async def test_probe_missing_accept_ranges_returns_none():
 
     server, original_chdir = _start_simple_server(18612, _H)
     try:
-        result = await ResourceProbe().probe("http://127.0.0.1:18612/anything")
+        result = await ResourceProbe(allow_private_networks=True).probe("http://127.0.0.1:18612/anything")
         assert result.supports_range is None
     finally:
         server.shutdown()
@@ -324,7 +324,7 @@ async def test_probe_accept_ranges_none_returns_false():
 
     server, original_chdir = _start_simple_server(18613, _H)
     try:
-        result = await ResourceProbe().probe("http://127.0.0.1:18613/anything")
+        result = await ResourceProbe(allow_private_networks=True).probe("http://127.0.0.1:18613/anything")
         assert result.supports_range is False
     finally:
         server.shutdown()
@@ -342,7 +342,7 @@ async def test_probe_html_is_not_downloadable():
 
     server, original_chdir = _start_simple_server(18614, _H)
     try:
-        result = await ResourceProbe().probe("http://127.0.0.1:18614/page")
+        result = await ResourceProbe(allow_private_networks=True).probe("http://127.0.0.1:18614/page")
         assert result.is_downloadable is False
     finally:
         server.shutdown()
@@ -359,7 +359,7 @@ async def test_probe_octet_stream_is_downloadable():
 
     server, original_chdir = _start_simple_server(18615, _H)
     try:
-        result = await ResourceProbe().probe("http://127.0.0.1:18615/blob")
+        result = await ResourceProbe(allow_private_networks=True).probe("http://127.0.0.1:18615/blob")
         assert result.is_downloadable is True
     finally:
         server.shutdown()
@@ -368,7 +368,7 @@ async def test_probe_octet_stream_is_downloadable():
 
 @pytest.mark.asyncio
 async def test_probe_zip_is_downloadable(probe_server):
-    probe = ResourceProbe()
+    probe = ResourceProbe(allow_private_networks=True)
     result = await probe.probe(probe_server["url"])
     assert result.is_downloadable is True
 
@@ -383,7 +383,7 @@ async def test_probe_missing_content_type_uses_extension_fallback():
 
     server, original_chdir = _start_simple_server(18616, _H)
     try:
-        result = await ResourceProbe().probe("http://127.0.0.1:18616/file.zip")
+        result = await ResourceProbe(allow_private_networks=True).probe("http://127.0.0.1:18616/file.zip")
         assert result.is_downloadable is True
     finally:
         server.shutdown()
@@ -392,7 +392,7 @@ async def test_probe_missing_content_type_uses_extension_fallback():
 
 @pytest.mark.asyncio
 async def test_probe_head_405_falls_back_to_get(probe_nohead_server):
-    probe = ResourceProbe()
+    probe = ResourceProbe(allow_private_networks=True)
     result = await probe.probe(probe_nohead_server["url"])
     assert result.status_code == 200
     assert result.filename == "from_get.zip"
@@ -400,7 +400,8 @@ async def test_probe_head_405_falls_back_to_get(probe_nohead_server):
 
 @pytest.mark.asyncio
 async def test_probe_connection_failure_returns_safe_result():
-    result = await ResourceProbe().probe("http://127.0.0.1:1/nothing")
+    probe = ResourceProbe(allow_private_networks=True)
+    result = await probe.probe("http://127.0.0.1:1/nothing")
     assert isinstance(result, ResourceProbeResult)
     assert result.is_downloadable is False
     assert result.status_code == 0
@@ -416,7 +417,7 @@ async def test_probe_http_404_does_not_crash():
 
     server, original_chdir = _start_simple_server(18617, _H)
     try:
-        result = await ResourceProbe().probe("http://127.0.0.1:18617/missing")
+        result = await ResourceProbe(allow_private_networks=True).probe("http://127.0.0.1:18617/missing")
         assert result.status_code == 404
         assert result.is_downloadable is False
     finally:
@@ -434,7 +435,7 @@ async def test_probe_http_403_does_not_crash():
 
     server, original_chdir = _start_simple_server(18618, _H)
     try:
-        result = await ResourceProbe().probe("http://127.0.0.1:18618/blocked")
+        result = await ResourceProbe(allow_private_networks=True).probe("http://127.0.0.1:18618/blocked")
         assert result.status_code == 403
         assert result.is_downloadable is False
     finally:
@@ -444,7 +445,7 @@ async def test_probe_http_403_does_not_crash():
 
 @pytest.mark.asyncio
 async def test_probe_final_url_after_redirect(probe_redirect_server):
-    probe = ResourceProbe()
+    probe = ResourceProbe(allow_private_networks=True)
     result = await probe.probe(probe_redirect_server["url"])
     assert result.status_code == 200
     assert result.final_url.endswith("/actual.zip")
@@ -510,7 +511,7 @@ async def test_probe_get_fallback_does_not_consume_full_body():
     thread.start()
 
     try:
-        result = await ResourceProbe().probe("http://127.0.0.1:18619/big.bin")
+        result = await ResourceProbe(allow_private_networks=True).probe("http://127.0.0.1:18619/big.bin")
         assert result.status_code == 200
         assert result.is_downloadable is True
         assert _CountingHandler.bytes_written < 5 * 1024 * 1024
@@ -522,7 +523,7 @@ async def test_probe_get_fallback_does_not_consume_full_body():
 @pytest.mark.asyncio
 async def test_probe_many_bounded_concurrency():
     urls = [f"http://127.0.0.1:18600/file.zip" for _ in range(8)]
-    results = await probe_many(urls, concurrency=2)
+    results = await probe_many(urls, concurrency=2, probe=ResourceProbe(allow_private_networks=True))
     assert len(results) == 8
     assert all(r.status_code == 200 for r in results)
 
@@ -533,7 +534,7 @@ async def test_probe_many_handles_failures():
         "http://127.0.0.1:18600/file.zip",
         "http://127.0.0.1:1/nothing",
     ]
-    results = await probe_many(urls)
+    results = await probe_many(urls, probe=ResourceProbe(allow_private_networks=True))
     assert len(results) == 2
     assert results[0].is_downloadable is True
     assert results[1].is_downloadable is False

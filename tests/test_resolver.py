@@ -77,7 +77,8 @@ def resolver_server():
 
 
 def _resolver(**kwargs) -> Resolver:
-    defaults = {"allow_private_networks": True}
+    probe = kwargs.pop("probe", None) or ResourceProbe(allow_private_networks=True)
+    defaults = {"allow_private_networks": True, "probe": probe}
     defaults.update(kwargs)
     return Resolver(**defaults)
 

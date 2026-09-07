@@ -6,6 +6,7 @@ from typing import Callable, Optional
 import httpx
 
 from app.core.task_manager import DownloadTask, DownloadErrorType, TaskStatus
+from app.services.download_security import RedirectWalkError, walk_redirects
 from app.utils.constants import CHUNK_SIZE
 from app.utils.logger import get_logger
 
@@ -20,17 +21,26 @@ _DOWNLOAD_TIMEOUT = httpx.Timeout(
     pool=30.0,
 )
 _FLUSH_INTERVAL = 5.0
+_MAX_DOWNLOAD_REDIRECTS = 5
 
 
 class DownloadManager:
 
-    def __init__(self, max_concurrent: int = 3):
+    def __init__(
+        self,
+        max_concurrent: int = 3,
+        *,
+        allow_private_networks: bool = False,
+        blocked_hosts=(),
+    ):
         self._max_concurrent = max_concurrent
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._tasks: dict[str, asyncio.Task] = {}
         self._download_tasks: list[DownloadTask] = []
         self._callbacks: list[ProgressCallback] = []
         self._speed_limit_bytes_per_sec: int = 0
+        self._allow_private = allow_private_networks
+        self._blocked_hosts = tuple(blocked_hosts)
 
     @property
     def download_tasks(self) -> list[DownloadTask]:
@@ -165,6 +175,17 @@ class DownloadManager:
                     self._emit_progress(task)
 
     async def _execute_download(self, task: DownloadTask):
+        from app.services.url_security import validate_url
+
+        decision = validate_url(
+            task.download_url,
+            allow_private_networks=self._allow_private,
+            blocked_hosts=self._blocked_hosts,
+        )
+        if not decision.is_safe:
+            task.error_type = DownloadErrorType.UNSAFE_REDIRECT
+            raise ValueError(f"Unsafe download URL: {decision.reason}")
+
         self._set_status(task, TaskStatus.PREPARING)
 
         dest_path = Path(task.destination)
@@ -178,55 +199,87 @@ class DownloadManager:
             if resume_position > 0:
                 log.info("Resuming download from %d bytes", resume_position)
 
-        async with httpx.AsyncClient(follow_redirects=True, timeout=_DOWNLOAD_TIMEOUT) as client:
-            headers = {}
+        async with httpx.AsyncClient(
+            follow_redirects=False,
+            timeout=_DOWNLOAD_TIMEOUT,
+        ) as client:
+            headers: dict[str, str] = {}
             if resume_position > 0:
                 headers["Range"] = f"bytes={resume_position}-"
 
-            need_restart = False
-            effective_resume = resume_position
+            def _factory(url: str | None = None) -> httpx.Request:
+                target = url or task.download_url
+                return client.build_request("GET", target, headers=dict(headers))
 
-            async with client.stream(
-                "GET",
-                task.download_url,
-                headers=headers,
-            ) as response:
-                if response.status_code == 416:
-                    need_restart = True
+            try:
+                walk = await walk_redirects(
+                    client,
+                    _factory,
+                    max_redirects=_MAX_DOWNLOAD_REDIRECTS,
+                    allow_private_networks=self._allow_private,
+                    blocked_hosts=self._blocked_hosts,
+                )
+            except RedirectWalkError as e:
+                if e.kind == "redirect_loop":
+                    task.error_type = DownloadErrorType.REDIRECT_LOOP
+                elif e.kind == "unsafe_redirect":
+                    task.error_type = DownloadErrorType.UNSAFE_REDIRECT
                 else:
-                    if response.status_code == 206:
-                        task.supports_resume = True
-                    elif response.status_code == 200 and resume_position > 0:
-                        task.error_type = DownloadErrorType.RANGE_UNSUPPORTED
-                        task.supports_resume = False
-                        log.warning(
-                            "Server does not support Range requests (returned 200). "
-                            "Restarting download from zero."
-                        )
-                        part_path.unlink(missing_ok=True)
-                        effective_resume = 0
-                    elif response.status_code == 200:
-                        task.supports_resume = False
+                    task.error_type = DownloadErrorType.NETWORK
+                raise ValueError(f"{e.message} ({e.kind})") from e
 
-                    if response.status_code not in (200, 206):
-                        response.raise_for_status()
+            response = walk.response
 
-                    self._validate_response(response, task)
-                    await self._stream_to_file(response, task, part_path, effective_resume)
+            if walk.changed_host and "Range" in headers:
+                log.warning(
+                    "Redirect changed host for '%s'; dropping Range header for safety",
+                    task.name,
+                )
+                await response.aclose()
+                headers.pop("Range", None)
+                response = await client.send(
+                    client.build_request("GET", walk.final_url),
+                    stream=True,
+                )
+
+            if response.status_code == 416:
+                await response.aclose()
+                need_restart = True
+            else:
+                if response.status_code == 206:
+                    task.supports_resume = True
+                elif response.status_code == 200 and resume_position > 0:
+                    task.error_type = DownloadErrorType.RANGE_UNSUPPORTED
+                    task.supports_resume = False
+                    log.warning(
+                        "Server does not support Range requests (returned 200). "
+                        "Restarting download from zero."
+                    )
+                    part_path.unlink(missing_ok=True)
+                    resume_position = 0
+                elif response.status_code == 200:
+                    task.supports_resume = False
+
+                if response.status_code not in (200, 206):
+                    response.raise_for_status()
+
+                self._validate_response(response, task)
+                await self._stream_to_file(response, task, part_path, resume_position)
+                await response.aclose()
+                need_restart = False
 
             if need_restart:
                 part_path.unlink(missing_ok=True)
                 headers.pop("Range", None)
-
-                async with client.stream(
-                    "GET",
-                    task.download_url,
-                    headers=headers,
-                ) as r2:
-                    self._validate_response(r2, task)
-                    if r2.status_code not in (200, 206):
-                        r2.raise_for_status()
-                    await self._stream_to_file(r2, task, part_path, 0)
+                response = await client.send(
+                    client.build_request("GET", walk.final_url),
+                    stream=True,
+                )
+                self._validate_response(response, task)
+                if response.status_code not in (200, 206):
+                    response.raise_for_status()
+                await self._stream_to_file(response, task, part_path, 0)
+                await response.aclose()
 
         self._set_status(task, TaskStatus.VERIFYING)
 

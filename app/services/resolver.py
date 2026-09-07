@@ -34,7 +34,12 @@ class Resolver:
         allow_private_networks: bool = False,
         blocked_hosts: Iterable[str] = (),
     ):
-        self._probe = probe or ResourceProbe()
+        if probe is None:
+            probe = ResourceProbe(
+                allow_private_networks=allow_private_networks,
+                blocked_hosts=blocked_hosts,
+            )
+        self._probe = probe
         self._concurrency = max(1, concurrency)
         self._allow_private = allow_private_networks
         self._blocked_hosts = tuple(blocked_hosts)
@@ -94,10 +99,10 @@ class Resolver:
         return out
 
     async def _resolve_one(self, url: str, anchor_text: str) -> ResolvedResource:
-        score_no_probe, reasons_no_probe = score_candidate(url=url, anchor_text=anchor_text)
+        from app.sources.http_headers import extract_filename_from_url
 
         if _has_strong_extension_signal(url):
-            from app.sources.http_headers import extract_filename_from_url
+            score_no_probe, reasons_no_probe = score_candidate(url=url, anchor_text=anchor_text)
             resource = ResolvedResource(
                 source_url=url,
                 final_url=url,
@@ -117,7 +122,12 @@ class Resolver:
             probe=probe_result,
             anchor_text=anchor_text,
         )
-        resource.reasons = reasons_no_probe + resource.reasons
+
+        if not probe_result.is_downloadable and probe_result.status_code >= 400:
+            from app.core.models import ConfidenceLevel
+            resource.score = 0
+            resource.confidence = ConfidenceLevel.REJECTED
+            resource.reasons = _merge_reasons([f"HTTP {probe_result.status_code} (non-success)"])
 
         final_decision = is_safe_redirect(
             url,
@@ -148,5 +158,17 @@ def _rejected(resource: ResolvedResource, reason: str) -> ResolvedResource:
     from app.core.models import ConfidenceLevel
     resource.score = 0
     resource.confidence = ConfidenceLevel.REJECTED
-    resource.reasons.append(f"rejected: {reason}")
+    resource.reasons = _merge_reasons(resource.reasons, [f"rejected: {reason}"])
     return resource
+
+
+def _merge_reasons(*lists: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for lst in lists:
+        for item in lst:
+            if item in seen:
+                continue
+            seen.add(item)
+            out.append(item)
+    return out

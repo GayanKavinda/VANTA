@@ -102,6 +102,9 @@ def normalize_url(url: str) -> str:
     - re-sort query parameters
     - drop meaningful query keys
     - follow redirects
+
+    Defensive against malformed URLs: invalid ports and ValueErrors fall
+    back to passing the URL through unchanged.
     """
     if not url:
         return url
@@ -115,8 +118,14 @@ def normalize_url(url: str) -> str:
     if not host:
         return url
 
-    port = parts.port
+    try:
+        port = parts.port
+    except ValueError:
+        return url
+
     if port is not None:
+        if port < 0 or port > 65535:
+            return url
         if (scheme == "http" and port == 80) or (scheme == "https" and port == 443):
             port = None
         netloc = host if port is None else f"{host}:{port}"
@@ -130,5 +139,8 @@ def normalize_url(url: str) -> str:
             path = "/"
 
     query = parts.query or ""
-    normalized = urlunsplit((scheme, netloc, path, query, ""))
+    try:
+        normalized = urlunsplit((scheme, netloc, path, query, ""))
+    except ValueError:
+        return url
     return normalized

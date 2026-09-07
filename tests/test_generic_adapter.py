@@ -12,6 +12,7 @@ from app.core.models import DownloadFile
 from app.services.analyzer import AnalyzerService
 from app.services.download_service import DownloadService
 from app.services.resolver import Resolver
+from app.services.resource_probe import ResourceProbe
 from app.sources.generic import GenericSourceAdapter
 from app.sources.html_parser import parse_html
 from app.sources.link_classifier import is_download_candidate
@@ -28,7 +29,11 @@ def _test_resolver(**kwargs) -> Resolver:
 
 def _test_adapter(**kwargs) -> GenericSourceAdapter:
     resolver = kwargs.pop("resolver", None) or _test_resolver()
-    return GenericSourceAdapter(resolver=resolver, **kwargs)
+    return GenericSourceAdapter(
+        resolver=resolver,
+        allow_private_networks=True,
+        **kwargs,
+    )
 
 
 class _PageHandler(SimpleHTTPRequestHandler):
@@ -582,7 +587,13 @@ async def test_generic_adapter_probes_with_bounded_concurrency():
     thread.start()
 
     try:
-        adapter = _test_adapter(resolver=Resolver(concurrency=2, allow_private_networks=True))
+        adapter = _test_adapter(
+            resolver=Resolver(
+                probe=ResourceProbe(allow_private_networks=True),
+                concurrency=2,
+                allow_private_networks=True,
+            )
+        )
         result = await adapter.analyze("http://127.0.0.1:18407/page.html")
         assert result.status == "ready"
         assert len(result.files) >= 1

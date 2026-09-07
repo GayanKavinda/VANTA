@@ -261,7 +261,7 @@ def bad_range_server(tmp_path_factory):
 
 @pytest.fixture
 def download_manager(tmp_path):
-    dm = DownloadManager(max_concurrent=3)
+    dm = DownloadManager(max_concurrent=3, allow_private_networks=True)
     return dm
 
 
@@ -636,7 +636,7 @@ async def test_speed_limit_throttles_download(tmp_path):
     url = f"http://127.0.0.1:{port}/throttle.bin"
 
     try:
-        dm = DownloadManager(max_concurrent=1)
+        dm = DownloadManager(max_concurrent=1, allow_private_networks=True)
         dm.set_speed_limit(10_000)
 
         dest = tmp_path / "throttle_download.bin"

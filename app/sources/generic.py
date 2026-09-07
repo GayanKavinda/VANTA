@@ -5,6 +5,7 @@ import httpx
 from app.core.models import AnalysisResult, DownloadFile
 from app.sources.base import BaseSourceAdapter
 from app.services.resolver import Resolver
+from app.services.url_security import validate_url
 from app.sources.html_parser import parse_html
 from app.sources.link_classifier import (
     deduplicate_preserve_order,
@@ -42,8 +43,17 @@ class GenericSourceAdapter(BaseSourceAdapter):
     def __init__(
         self,
         resolver: Resolver | None = None,
+        *,
+        allow_private_networks: bool = False,
+        blocked_hosts=(),
     ):
-        self._resolver = resolver or Resolver(concurrency=_PROBE_CONCURRENCY)
+        self._resolver = resolver or Resolver(
+            concurrency=_PROBE_CONCURRENCY,
+            allow_private_networks=allow_private_networks,
+            blocked_hosts=blocked_hosts,
+        )
+        self._allow_private = allow_private_networks
+        self._blocked_hosts = tuple(blocked_hosts)
 
     @property
     def name(self) -> str:
@@ -56,6 +66,20 @@ class GenericSourceAdapter(BaseSourceAdapter):
         return lowered.startswith(("http://", "https://"))
 
     async def analyze(self, url: str) -> AnalysisResult:
+        decision = validate_url(
+            url,
+            allow_private_networks=self._allow_private,
+            blocked_hosts=self._blocked_hosts,
+        )
+        if not decision.is_safe:
+            log.warning("GenericSourceAdapter rejected URL %s: %s", url, decision.reason)
+            return AnalysisResult(
+                title=f"Rejected: {decision.reason}",
+                source=self.name,
+                files=[],
+                status="error",
+            )
+
         try:
             async with httpx.AsyncClient(
                 follow_redirects=True,

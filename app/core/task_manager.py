@@ -22,6 +22,8 @@ class DownloadErrorType(enum.Enum):
     RANGE_UNSUPPORTED = "range_unsupported"
     DISK = "disk"
     VERIFICATION = "verification"
+    REDIRECT_LOOP = "redirect_loop"
+    UNSAFE_REDIRECT = "unsafe_redirect"
     UNKNOWN = "unknown"
 
 
