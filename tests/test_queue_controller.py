@@ -10,7 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from app.core.downloader import DownloadManager
-from app.core.task_manager import DownloadTask, TaskStatus
+from app.core.task_manager import DownloadTask, DownloadErrorType, TaskStatus
 from app.database.repositories import load_download_tasks, save_download_task
 from app.utils.logger import setup_logger
 
@@ -301,6 +301,8 @@ async def test_retry_failed_with_part_file(queue_manager, slow_server, tmp_path)
 
     task.status = TaskStatus.FAILED
     task.error = "Network timeout"
+    task.error_type = DownloadErrorType.NETWORK
+    task.supports_resume = True
     task.downloaded_size = len(partial)
     task.total_size = slow_server["a.bin"]["size"]
     queue_manager._emit_progress(task)

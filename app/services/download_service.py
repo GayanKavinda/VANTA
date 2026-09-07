@@ -93,3 +93,9 @@ class DownloadService:
 
     def retry_failed(self):
         self._download_manager.retry_failed()
+
+    def retry_task(self, task_id: str):
+        self._download_manager.retry_task(task_id)
+
+    def retry_task(self, task_id: str):
+        self._download_manager.retry_task(task_id)

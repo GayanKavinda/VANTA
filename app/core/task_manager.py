@@ -15,6 +15,16 @@ class TaskStatus(enum.Enum):
     CANCELLED = "cancelled"
 
 
+class DownloadErrorType(enum.Enum):
+    NETWORK = "network"
+    ACCESS_DENIED = "access_denied"
+    HTML_RESPONSE = "html_response"
+    RANGE_UNSUPPORTED = "range_unsupported"
+    DISK = "disk"
+    VERIFICATION = "verification"
+    UNKNOWN = "unknown"
+
+
 @dataclass
 class DownloadTask:
     id: str
@@ -30,7 +40,9 @@ class DownloadTask:
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     error: Optional[str] = None
+    error_type: DownloadErrorType = DownloadErrorType.UNKNOWN
     supports_resume: bool = False
+    queue_order: int = 0
 
     @property
     def is_active(self) -> bool:
@@ -82,6 +94,8 @@ class DownloadTask:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "error": self.error,
+            "error_type": self.error_type.value,
             "supports_resume": self.supports_resume,
             "queue_position": self.queue_position,
+            "queue_order": self.queue_order,
         }

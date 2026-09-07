@@ -33,7 +33,9 @@ class DownloadRecord(Base):
     created_at = Column(Float, default=time.time)
     updated_at = Column(Float, default=time.time)
     error = Column(Text, nullable=True)
+    error_type = Column(String, nullable=True)
     supports_resume = Column(Integer, default=False)
+    queue_order = Column(Integer, nullable=True)
 
     def to_dict(self) -> dict:
         return {
@@ -50,7 +52,9 @@ class DownloadRecord(Base):
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "error": self.error,
+            "error_type": self.error_type,
             "supports_resume": bool(self.supports_resume),
+            "queue_order": self.queue_order,
         }
 
 

@@ -1,15 +1,33 @@
 import time
 from typing import Optional
 
-from app.core.task_manager import DownloadTask, TaskStatus
-from app.database.connection import get_session
+from sqlalchemy import text
+
+from app.core.task_manager import DownloadTask, DownloadErrorType, TaskStatus
+from app.database.connection import get_session, engine
 from app.database.models import DownloadRecord, DownloadStatus
 from app.utils.logger import get_logger
 
 log = get_logger("vanta.database.repositories")
 
 
+def _migrate_downloads_table():
+    with engine.connect() as conn:
+        existing_columns = {
+            row[1] for row in conn.execute(text("PRAGMA table_info(downloads)")).fetchall()
+        }
+        pending = []
+        if "error_type" not in existing_columns:
+            pending.append("ALTER TABLE downloads ADD COLUMN error_type TEXT")
+        if "queue_order" not in existing_columns:
+            pending.append("ALTER TABLE downloads ADD COLUMN queue_order INTEGER")
+        for stmt in pending:
+            conn.execute(text(stmt))
+            conn.commit()
+
+
 def save_download_task(task: DownloadTask):
+    _migrate_downloads_table()
     session = get_session()
     try:
         record = session.get(DownloadRecord, task.id)
@@ -25,7 +43,9 @@ def save_download_task(task: DownloadTask):
             record.progress = task.progress
             record.updated_at = time.time()
             record.error = task.error
+            record.error_type = task.error_type.value if task.error_type else None
             record.supports_resume = int(task.supports_resume)
+            record.queue_order = task.queue_order or None
         else:
             record = DownloadRecord(
                 id=task.id,
@@ -41,7 +61,9 @@ def save_download_task(task: DownloadTask):
                 created_at=task.created_at,
                 updated_at=task.updated_at,
                 error=task.error,
+                error_type=task.error_type.value if task.error_type else None,
                 supports_resume=int(task.supports_resume),
+                queue_order=task.queue_order or None,
             )
             session.add(record)
         session.commit()
@@ -50,6 +72,7 @@ def save_download_task(task: DownloadTask):
 
 
 def load_download_tasks() -> list[DownloadTask]:
+    _migrate_downloads_table()
     session = get_session()
     try:
         records = session.query(DownloadRecord).all()
@@ -69,7 +92,9 @@ def load_download_tasks() -> list[DownloadTask]:
                 created_at=r.created_at,
                 updated_at=r.updated_at,
                 error=r.error,
+                error_type=DownloadErrorType(r.error_type) if r.error_type else DownloadErrorType.UNKNOWN,
                 supports_resume=bool(r.supports_resume),
+                queue_order=r.queue_order or 0,
             )
             tasks.append(task)
         return tasks

@@ -219,4 +219,4 @@ class DownloadsPage(QWidget):
             return
         task = manager.find_task(task_id)
         if task is not None and task.status == TaskStatus.FAILED:
-            manager.retry_failed()
+            manager.retry_task(task_id)

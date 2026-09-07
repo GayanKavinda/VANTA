@@ -5,7 +5,7 @@ from typing import Callable, Optional
 
 import httpx
 
-from app.core.task_manager import DownloadTask, TaskStatus
+from app.core.task_manager import DownloadTask, DownloadErrorType, TaskStatus
 from app.utils.constants import CHUNK_SIZE
 from app.utils.logger import get_logger
 
@@ -141,6 +141,8 @@ class DownloadManager:
                 raise
             except Exception as e:
                 log.error("Download failed for '%s': %s", task.name, e, exc_info=True)
+                if task.error_type == DownloadErrorType.UNKNOWN:
+                    task.error_type = DownloadErrorType.NETWORK
                 self._set_status(task, TaskStatus.FAILED, str(e))
             finally:
                 self._tasks.pop(task.id, None)
@@ -215,6 +217,7 @@ class DownloadManager:
             part_path.rename(dest_path)
             self._set_status(task, TaskStatus.COMPLETED)
         else:
+            task.error_type = DownloadErrorType.VERIFICATION
             self._set_status(task, TaskStatus.FAILED, "File verification failed")
             part_path.unlink(missing_ok=True)
 
@@ -222,6 +225,7 @@ class DownloadManager:
         content_type = response.headers.get("content-type", "").lower()
 
         if "text/html" in content_type:
+            task.error_type = DownloadErrorType.HTML_RESPONSE
             raise ValueError(
                 f"Server returned an HTML page instead of '{task.name}' "
                 f"(Content-Type: {content_type}). "
@@ -229,6 +233,7 @@ class DownloadManager:
             )
 
         if "text/plain" in content_type and response.headers.get("content-disposition") is None:
+            task.error_type = DownloadErrorType.ACCESS_DENIED
             raise ValueError(
                 f"Server returned a text response instead of '{task.name}' "
                 f"(Content-Type: {content_type})."
@@ -354,30 +359,63 @@ class DownloadManager:
     def clear_completed(self):
         self._download_tasks = [
             t for t in self._download_tasks
-            if not t.is_terminal
+            if t.status != TaskStatus.COMPLETED
         ]
         self._update_queue_positions()
+
+    def retry_task(self, task_id: str):
+        task = self.find_task(task_id)
+        if task is None or task.status != TaskStatus.FAILED:
+            return
+        self._prepare_retry(task)
 
     def retry_failed(self):
         for task in list(self._download_tasks):
             if task.status == TaskStatus.FAILED:
-                dest_path = Path(task.destination)
-                part_path = dest_path.with_suffix(dest_path.suffix + ".part")
-                has_part = part_path.exists() and part_path.stat().st_size > 0
-                was_resume_failure = "html" in (task.error or "").lower()
-                if has_part and not was_resume_failure:
-                    task.status = TaskStatus.PAUSED
-                    task.error = None
-                    self.resume_download(task)
-                else:
-                    part_path.unlink(missing_ok=True)
-                    dest_path.unlink(missing_ok=True)
-                    task.downloaded_size = 0
-                    task.progress = 0.0
-                    task.speed = 0.0
-                    task.total_size = 0
-                    task.supports_resume = False
-                    task.error = None
-                    self._set_status(task, TaskStatus.QUEUED)
-                    asyncio_task = asyncio.create_task(self._run(task))
-                    self._tasks[task.id] = asyncio_task
+                self._prepare_retry(task)
+
+    def _prepare_retry(self, task: DownloadTask):
+        dest_path = Path(task.destination)
+        part_path = dest_path.with_suffix(dest_path.suffix + ".part")
+        has_part = part_path.exists() and part_path.stat().st_size > 0
+        can_resume = (
+            has_part
+            and task.supports_resume
+            and task.error_type != DownloadErrorType.HTML_RESPONSE
+            and task.error_type != DownloadErrorType.ACCESS_DENIED
+        )
+
+        if can_resume:
+            task.status = TaskStatus.PAUSED
+            task.error = None
+            task.error_type = DownloadErrorType.UNKNOWN
+            self.resume_download(task)
+        else:
+            part_path.unlink(missing_ok=True)
+            dest_path.unlink(missing_ok=True)
+            task.downloaded_size = 0
+            task.progress = 0.0
+            task.speed = 0.0
+            task.total_size = 0
+            task.supports_resume = False
+            task.error = None
+            task.error_type = DownloadErrorType.UNKNOWN
+            self._set_status(task, TaskStatus.QUEUED)
+            asyncio_task = asyncio.create_task(self._run(task))
+            self._tasks[task.id] = asyncio_task
+
+    def restore_tasks(self, tasks: list[DownloadTask]):
+        for task in tasks:
+            if task.status in (
+                TaskStatus.DOWNLOADING,
+                TaskStatus.PREPARING,
+                TaskStatus.VERIFYING,
+            ):
+                task.status = TaskStatus.PAUSED
+                task.error = "Download was interrupted"
+                task.error_type = DownloadErrorType.NETWORK
+
+            self._download_tasks.append(task)
+            self._emit_progress(task)
+
+        self._update_queue_positions()

@@ -16,6 +16,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.core.downloader import DownloadManager
+from app.core.file_manager import FileManager
 from app.services.settings_service import SettingsService
 from app.utils.logger import get_logger
 
@@ -27,12 +29,16 @@ class SettingsPage(QWidget):
 
     def __init__(self):
         super().__init__()
-        from app.core.app_state import AppState
-        self._app_state = AppState()
         self._settings = SettingsService()
+        self._download_manager: DownloadManager | None = None
+        self._file_manager: FileManager | None = None
 
         self._build_ui()
         self._load_values()
+
+    def set_services(self, download_manager: DownloadManager, file_manager: FileManager):
+        self._download_manager = download_manager
+        self._file_manager = file_manager
 
     def _build_ui(self):
         main_layout = QVBoxLayout(self)
@@ -203,13 +209,15 @@ class SettingsPage(QWidget):
             selected = dialog.selectedFiles()[0]
             self._settings.set("download_dir", selected)
             self._dir_display.setText(selected)
-            self._app_state.file_manager.set_default_dir(Path(selected))
+            if self._file_manager:
+                self._file_manager.set_default_dir(Path(selected))
             self.settings_changed.emit("download_dir", selected)
             log.info("Download directory changed to: %s", selected)
 
     def _on_concurrent_changed(self, value: int):
         self._settings.set("max_concurrent", value)
-        self._app_state.download_manager.set_max_concurrent(value)
+        if self._download_manager:
+            self._download_manager.set_max_concurrent(value)
         self.settings_changed.emit("max_concurrent", str(value))
         log.info("Max concurrent downloads set to: %d", value)
 

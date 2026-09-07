@@ -69,6 +69,11 @@ class MainWindow(QMainWindow):
             self._download_service,
         )
 
+        self.settings_page.set_services(
+            self._app_state.download_manager,
+            self._app_state.file_manager,
+        )
+
         self.stacked_widget.addWidget(self.home_page)
         self.stacked_widget.addWidget(self.downloads_page)
         self.stacked_widget.addWidget(self.history_page)
@@ -100,18 +105,18 @@ class MainWindow(QMainWindow):
         paused_tasks = []
 
         for task in tasks:
-            self._app_state.download_manager._download_tasks.append(task)
-            if not task.is_terminal:
-                self._app_state.download_manager._emit_progress(task)
+            if task.status in (
+                TaskStatus.DOWNLOADING,
+                TaskStatus.PREPARING,
+                TaskStatus.VERIFYING,
+            ):
+                task.status = TaskStatus.PAUSED
+                task.error = "Download was interrupted"
+                interrupted_tasks.append(task)
+            elif task.status == TaskStatus.PAUSED:
+                paused_tasks.append(task)
 
-            if not task.is_terminal:
-                if task.status in (TaskStatus.DOWNLOADING, TaskStatus.PREPARING, TaskStatus.VERIFYING):
-                    task.status = TaskStatus.PAUSED
-                    task.error = "Download was interrupted"
-                    interrupted_tasks.append(task)
-                else:
-                    paused_tasks.append(task)
-
+        self._app_state.download_manager.restore_tasks(tasks)
         self.history_page.refresh()
 
         if interrupted_tasks:
