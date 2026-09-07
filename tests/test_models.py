@@ -6,6 +6,18 @@ def test_download_file_defaults():
     f = DownloadFile(name="test.zip", url="https://example.com/test.zip")
     assert f.name == "test.zip"
     assert f.size is None
+    assert f.content_type is None
+
+
+def test_download_file_with_content_type():
+    f = DownloadFile(
+        name="test.zip",
+        url="https://example.com/test.zip",
+        size=1024,
+        content_type="application/zip",
+    )
+    assert f.content_type == "application/zip"
+    assert f.size == 1024
 
 
 def test_analysis_result_defaults():

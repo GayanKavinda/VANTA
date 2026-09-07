@@ -58,4 +58,4 @@ def test_source_detector_fallback_to_generic():
     detector = SourceDetector()
     adapter = detector.detect("https://example.com/page")
     assert adapter is not None
-    assert adapter.name == "Generic Source"
+    assert adapter.name == "Generic Page"

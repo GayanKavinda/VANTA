@@ -7,6 +7,7 @@ class DownloadFile:
     name: str
     url: str
     size: Optional[int] = None
+    content_type: Optional[str] = None
 
 
 @dataclass

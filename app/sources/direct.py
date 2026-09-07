@@ -1,7 +1,15 @@
 import os
+from urllib.parse import unquote, urlparse
+
+import httpx
 
 from app.core.models import AnalysisResult, DownloadFile
 from app.sources.base import BaseSourceAdapter
+from app.utils.logger import get_logger
+
+log = get_logger("vanta.sources.direct")
+
+_TIMEOUT = httpx.Timeout(30.0)
 
 
 class DirectDownloadAdapter(BaseSourceAdapter):
@@ -24,23 +32,30 @@ class DirectDownloadAdapter(BaseSourceAdapter):
         ) or "download" in lowered or "file=" in lowered
 
     async def analyze(self, url: str) -> AnalysisResult:
-        async with httpx.AsyncClient(follow_redirects=True) as client:
-            response = await client.head(url, timeout=httpx.Timeout(30))
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=_TIMEOUT,
+        ) as client:
+            response = await client.head(url)
 
-            if response.status_code == 405:
-                async with client.stream(
-                    "GET",
-                    url,
-                    timeout=httpx.Timeout(30),
-                ) as response:
-                    async for _ in response.aiter_bytes(4096):
-                        pass
+            if response.status_code == httpx.codes.METHOD_NOT_ALLOWED:
+                response = await client.get(url)
 
-        content_disposition = response.headers.get("content-disposition", "")
-        filename = self._extract_filename(content_disposition, url)
-        size = int(response.headers.get("content-length", 0)) or None
+            response.raise_for_status()
 
-        file = DownloadFile(name=filename, url=url, size=size)
+            final_url = str(response.url)
+            content_disposition = response.headers.get("content-disposition", "")
+            content_type = response.headers.get("content-type")
+            size = int(response.headers.get("content-length", 0)) or None
+
+        filename = self._extract_filename(content_disposition, final_url)
+
+        file = DownloadFile(
+            name=filename,
+            url=final_url,
+            size=size,
+            content_type=content_type,
+        )
 
         return AnalysisResult(
             title=filename,
@@ -58,8 +73,12 @@ class DirectDownloadAdapter(BaseSourceAdapter):
                     filename = part[len("filename="):].strip('"')
                     if filename:
                         return os.path.basename(filename)
-
-        from urllib.parse import unquote, urlparse
+                if part.startswith("filename*="):
+                    raw = part[len("filename*"):].strip('"')
+                    if "''" in raw:
+                        raw = raw.split("''", 1)[1]
+                    if raw:
+                        return os.path.basename(unquote(raw))
 
         path = urlparse(url).path
         basename = unquote(path).split("/")[-1]

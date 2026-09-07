@@ -3,7 +3,7 @@ from typing import Optional
 
 from app.core.downloader import DownloadManager
 from app.core.file_manager import FileManager
-from app.core.models import AnalysisResult
+from app.core.models import AnalysisResult, DownloadFile
 from app.core.task_manager import DownloadTask, TaskStatus
 from app.services.analyzer import AnalyzerService
 from app.utils.logger import get_logger
@@ -44,18 +44,33 @@ class DownloadService:
             return None
 
         first_file = result.files[0]
+        return await self.start_file_download(
+            source_url=url,
+            file=first_file,
+            destination=destination,
+        )
+
+    async def start_file_download(
+        self,
+        source_url: str,
+        file: DownloadFile,
+        destination: str | Path | None = None,
+    ) -> DownloadTask:
         dest_dir = Path(destination) if destination else self._file_manager.default_dir
-        filename = self._file_manager.safe_join(first_file.name)
+        filename = self._file_manager.safe_join(file.name)
         dest_path = self._file_manager.get_unique_path(filename, dest_dir)
 
         task = await self._download_manager.add_download(
-            name=first_file.name,
-            source_url=url,
-            download_url=first_file.url,
+            name=file.name,
+            source_url=source_url,
+            download_url=file.url,
             destination=str(dest_path),
         )
 
-        log.info("Started download task '%s' -> %s", task.id, dest_path)
+        log.info(
+            "Started download task '%s' (%s) -> %s",
+            task.id, file.name, dest_path,
+        )
         return task
 
     def get_all_tasks(self) -> list[DownloadTask]:
