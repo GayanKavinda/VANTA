@@ -88,6 +88,7 @@ class MainWindow(QMainWindow):
     def _connect_signals(self):
         self.home_page.url_analyzed.connect(self._on_url_analyzed)
         self.home_page.download_requested.connect(self._on_download_requested)
+        self.home_page.downloads_selected.connect(self._on_downloads_selected)
         self._create_actions()
 
     def _create_actions(self):
@@ -185,6 +186,13 @@ class MainWindow(QMainWindow):
     def _on_download_requested(self, source_url: str, resource_view):
         asyncio.create_task(self._start_resource_download(source_url, resource_view))
 
+    def _on_downloads_selected(self, source_url: str, resource_views: list):
+        if not resource_views:
+            return
+        asyncio.create_task(
+            self._start_bulk_downloads(source_url, resource_views)
+        )
+
     async def _start_resource_download(self, source_url: str, resource_view):
         try:
             task = await self._download_service.start_file_download(
@@ -200,6 +208,34 @@ class MainWindow(QMainWindow):
             self.home_page.show_error(
                 "Download Failed",
                 "Could not start this download. Check the logs.",
+            )
+
+    async def _start_bulk_downloads(self, source_url: str, resource_views: list):
+        started = 0
+        failed: list[str] = []
+        for rv in resource_views:
+            try:
+                task = await self._download_service.start_file_download(
+                    source_url=source_url,
+                    file=rv.file,
+                )
+                if task:
+                    started += 1
+            except Exception as e:
+                log.error(
+                    "Failed to start selected download '%s': %s",
+                    getattr(rv.file, "name", "?"), e, exc_info=True,
+                )
+                failed.append(getattr(rv.file, "name", "?"))
+
+        if started:
+            self.stacked_widget.setCurrentIndex(1)
+            self.sidebar.set_active(1)
+            log.info("Bulk download started: %d queued, %d failed", started, len(failed))
+        if failed:
+            self.home_page.show_error(
+                "Some downloads could not start",
+                "Failed to start: " + ", ".join(failed),
             )
 
     def closeEvent(self, event):

@@ -111,6 +111,166 @@ QFrame#download_card {
     border-radius: 12px;
 }
 
+QFrame#resource_row {
+    background: #111217;
+    border: 1px solid #1A1B20;
+    border-radius: 10px;
+}
+
+QFrame#resource_row:hover {
+    border: 1px solid #2A2C36;
+}
+
+QFrame#empty_state {
+    background: transparent;
+    border: 1px dashed #292B33;
+    border-radius: 12px;
+}
+
+QFrame#error_state {
+    background: #1A1416;
+    border: 1px solid #5A2226;
+    border-radius: 12px;
+}
+
+QLabel#empty_state_title {
+    color: #E8E8EA;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+QLabel#empty_state_body {
+    color: #8A8A9A;
+    font-size: 13px;
+}
+
+QLabel#error_state_title {
+    color: #FF8585;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+QLabel#error_state_body {
+    color: #D88A8A;
+    font-size: 13px;
+}
+
+QLabel#section_title {
+    color: #E8E8EA;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+QLabel#section_meta {
+    color: #8A8A9A;
+    font-size: 13px;
+}
+
+QLabel#resource_name {
+    color: #E8E8EA;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+QLabel#resource_meta {
+    color: #8A8A9A;
+    font-size: 12px;
+}
+
+QLabel#resource_size {
+    color: #C8C8D0;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+QLabel#confidence_high {
+    color: #5AC8FA;
+    background-color: rgba(90, 200, 250, 0.10);
+    padding: 2px 8px;
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+QLabel#confidence_medium {
+    color: #F0C674;
+    background-color: rgba(240, 198, 116, 0.10);
+    padding: 2px 8px;
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+QLabel#confidence_low {
+    color: #B0B0BC;
+    background-color: rgba(255, 255, 255, 0.04);
+    padding: 2px 8px;
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+QLabel#confidence_rejected {
+    color: #FF8585;
+    background-color: rgba(255, 107, 107, 0.10);
+    padding: 2px 8px;
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+QPushButton#secondary {
+    background: transparent;
+    color: #E8E8EA;
+    border: 1px solid #292B33;
+    border-radius: 8px;
+    padding: 6px 14px;
+    font-weight: 600;
+}
+
+QPushButton#secondary:hover {
+    background: #1B1B22;
+    border: 1px solid #3A3C4A;
+}
+
+QPushButton#secondary:disabled {
+    color: #5A5A66;
+    border: 1px solid #1F1F25;
+}
+
+QPushButton#secondary[size="small"] {
+    padding: 4px 10px;
+    font-size: 12px;
+}
+
+QPushButton#primary_action[size="small"] {
+    padding: 4px 10px;
+    font-size: 12px;
+}
+
+QCheckBox {
+    font-size: 13px;
+    color: #E8E8EA;
+    spacing: 8px;
+}
+
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid #3A3C4A;
+    border-radius: 4px;
+    background: #17181E;
+}
+
+QCheckBox::indicator:hover {
+    border: 1px solid #4A4C5A;
+}
+
+QCheckBox::indicator:checked {
+    background: #5AC8FA;
+    border: 1px solid #5AC8FA;
+}
+
 QProgressBar {
     background: #1A1B20;
     border: none;
