@@ -265,8 +265,6 @@ async def test_probe_accept_ranges_bytes(probe_server):
 
 @pytest.mark.asyncio
 async def test_probe_handles_malformed_content_length():
-    serve_dir_marker = []
-
     class _H(_StaticResponseHandler):
         status = 200
         content_type = "application/zip"

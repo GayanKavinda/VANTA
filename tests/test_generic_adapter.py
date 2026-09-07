@@ -11,12 +11,24 @@ from app.core.file_manager import FileManager
 from app.core.models import DownloadFile
 from app.services.analyzer import AnalyzerService
 from app.services.download_service import DownloadService
+from app.services.resolver import Resolver
 from app.sources.generic import GenericSourceAdapter
 from app.sources.html_parser import parse_html
 from app.sources.link_classifier import is_download_candidate
 from app.utils.logger import setup_logger
 
 setup_logger()
+
+
+def _test_resolver(**kwargs) -> Resolver:
+    defaults = {"allow_private_networks": True}
+    defaults.update(kwargs)
+    return Resolver(**defaults)
+
+
+def _test_adapter(**kwargs) -> GenericSourceAdapter:
+    resolver = kwargs.pop("resolver", None) or _test_resolver()
+    return GenericSourceAdapter(resolver=resolver, **kwargs)
 
 
 class _PageHandler(SimpleHTTPRequestHandler):
@@ -218,7 +230,7 @@ def page_server_non_html():
 
 @pytest.mark.asyncio
 async def test_generic_adapter_extracts_title(page_server_with_links):
-    adapter = GenericSourceAdapter()
+    adapter = _test_adapter()
     result = await adapter.analyze(page_server_with_links)
     assert result.title == "Game Page"
     assert result.source == "Generic Page"
@@ -226,7 +238,7 @@ async def test_generic_adapter_extracts_title(page_server_with_links):
 
 @pytest.mark.asyncio
 async def test_generic_adapter_discovers_links(page_server_with_links):
-    adapter = GenericSourceAdapter()
+    adapter = _test_adapter()
     result = await adapter.analyze(page_server_with_links)
     urls = [f.url for f in result.files]
     assert any("game.zip" in u for u in urls)
@@ -236,7 +248,7 @@ async def test_generic_adapter_discovers_links(page_server_with_links):
 
 @pytest.mark.asyncio
 async def test_generic_adapter_ignores_javascript_mailto_fragment(page_server_with_links):
-    adapter = GenericSourceAdapter()
+    adapter = _test_adapter()
     result = await adapter.analyze(page_server_with_links)
     urls = [f.url for f in result.files]
     for u in urls:
@@ -247,7 +259,7 @@ async def test_generic_adapter_ignores_javascript_mailto_fragment(page_server_wi
 
 @pytest.mark.asyncio
 async def test_generic_adapter_ignores_non_download_links(page_server_with_links):
-    adapter = GenericSourceAdapter()
+    adapter = _test_adapter()
     result = await adapter.analyze(page_server_with_links)
     urls = [f.url for f in result.files]
     for u in urls:
@@ -256,7 +268,7 @@ async def test_generic_adapter_ignores_non_download_links(page_server_with_links
 
 @pytest.mark.asyncio
 async def test_generic_adapter_deduplicates(page_server_with_links):
-    adapter = GenericSourceAdapter()
+    adapter = _test_adapter()
     result = await adapter.analyze(page_server_with_links)
     urls = [f.url for f in result.files]
     assert len(urls) == len(set(urls))
@@ -264,7 +276,7 @@ async def test_generic_adapter_deduplicates(page_server_with_links):
 
 @pytest.mark.asyncio
 async def test_generic_adapter_returns_multiple_files(page_server_with_links):
-    adapter = GenericSourceAdapter()
+    adapter = _test_adapter()
     result = await adapter.analyze(page_server_with_links)
     assert result.status == "ready"
     assert len(result.files) >= 3
@@ -272,7 +284,7 @@ async def test_generic_adapter_returns_multiple_files(page_server_with_links):
 
 @pytest.mark.asyncio
 async def test_generic_adapter_no_links_returns_unsupported(page_server_no_links):
-    adapter = GenericSourceAdapter()
+    adapter = _test_adapter()
     result = await adapter.analyze(page_server_no_links)
     assert result.status == "unsupported"
     assert result.files == []
@@ -280,7 +292,7 @@ async def test_generic_adapter_no_links_returns_unsupported(page_server_no_links
 
 @pytest.mark.asyncio
 async def test_generic_adapter_http_error_returns_error(page_server_404):
-    adapter = GenericSourceAdapter()
+    adapter = _test_adapter()
     result = await adapter.analyze(page_server_404)
     assert result.status == "error"
     assert result.files == []
@@ -288,7 +300,7 @@ async def test_generic_adapter_http_error_returns_error(page_server_404):
 
 @pytest.mark.asyncio
 async def test_generic_adapter_non_html_returns_unsupported(page_server_non_html):
-    adapter = GenericSourceAdapter()
+    adapter = _test_adapter()
     result = await adapter.analyze(page_server_non_html)
     assert result.status == "unsupported"
     assert result.files == []
@@ -296,7 +308,7 @@ async def test_generic_adapter_non_html_returns_unsupported(page_server_non_html
 
 @pytest.mark.asyncio
 async def test_generic_adapter_resolves_relative_urls(page_server_relative_only):
-    adapter = GenericSourceAdapter()
+    adapter = _test_adapter()
     result = await adapter.analyze(page_server_relative_only)
     assert result.status == "ready"
     assert len(result.files) == 1
@@ -305,7 +317,7 @@ async def test_generic_adapter_resolves_relative_urls(page_server_relative_only)
 
 @pytest.mark.asyncio
 async def test_generic_adapter_prefers_url_filename_over_anchor_text(page_server_with_links):
-    adapter = GenericSourceAdapter()
+    adapter = _test_adapter()
     result = await adapter.analyze(page_server_with_links)
     by_url = {f.url: f.name for f in result.files}
     assert by_url["https://example.com/game.zip"] == "game.zip"
@@ -314,7 +326,7 @@ async def test_generic_adapter_prefers_url_filename_over_anchor_text(page_server
 
 @pytest.mark.asyncio
 async def test_generic_adapter_can_handle_http():
-    adapter = GenericSourceAdapter()
+    adapter = _test_adapter()
     assert adapter.can_handle("https://example.com/page") is True
     assert adapter.can_handle("http://example.com/page") is True
     assert adapter.can_handle("ftp://example.com") is False
@@ -395,7 +407,7 @@ async def test_download_service_start_file_download_sanitizes_filename(tmp_path)
 
 @pytest.mark.asyncio
 async def test_generic_adapter_discovers_extensionless_resource_via_probe(page_server_extensionless):
-    adapter = GenericSourceAdapter()
+    adapter = _test_adapter()
     result = await adapter.analyze(page_server_extensionless["page"])
     assert result.status == "ready"
     assert len(result.files) == 1
@@ -408,21 +420,20 @@ async def test_generic_adapter_discovers_extensionless_resource_via_probe(page_s
 
 
 @pytest.mark.asyncio
-async def test_generic_adapter_does_not_probe_obvious_non_resources(page_server_extensionless):
-    from unittest.mock import patch
-
-    adapter = GenericSourceAdapter()
+async def test_generic_adapter_does_not_probe_obvious_non_resources(page_server_extensionless, monkeypatch):
+    adapter = _test_adapter()
 
     called_urls: list[str] = []
 
-    real_probe = adapter._probe.probe
+    real_probe = adapter._resolver._probe.probe
 
     async def spy_probe(url):
         called_urls.append(url)
         return await real_probe(url)
 
-    with patch.object(adapter._probe, "probe", side_effect=spy_probe):
-        await adapter.analyze(page_server_extensionless["page"])
+    monkeypatch.setattr(adapter._resolver._probe, "probe", spy_probe)
+
+    await adapter.analyze(page_server_extensionless["page"])
 
     for u in called_urls:
         assert "/about" not in u
@@ -495,7 +506,7 @@ async def test_generic_adapter_failed_probe_does_not_fail_other_candidates():
     thread.start()
 
     try:
-        adapter = GenericSourceAdapter()
+        adapter = _test_adapter()
         result = await adapter.analyze("http://127.0.0.1:18406/page.html")
         assert result.status == "ready"
         names = {f.name for f in result.files}
@@ -571,7 +582,7 @@ async def test_generic_adapter_probes_with_bounded_concurrency():
     thread.start()
 
     try:
-        adapter = GenericSourceAdapter(probe_concurrency=2)
+        adapter = _test_adapter(resolver=Resolver(concurrency=2, allow_private_networks=True))
         result = await adapter.analyze("http://127.0.0.1:18407/page.html")
         assert result.status == "ready"
         assert len(result.files) >= 1

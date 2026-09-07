@@ -141,5 +141,10 @@ def test_deduplicate_skips_empty():
     assert deduplicate_preserve_order(urls) == ["a", "b"]
 
 
-def test_normalize_url_removed():
-    assert not hasattr(lc, "normalize_url")
+def test_normalize_url_exists_and_normalizes():
+    from app.sources.link_classifier import normalize_url
+
+    assert normalize_url("HTTP://Example.com:80/foo/") == "http://example.com/foo"
+    assert normalize_url("https://example.com:443/bar/#frag") == "https://example.com/bar"
+    assert normalize_url("http://example.com/file.zip#download") == "http://example.com/file.zip"
+    assert normalize_url("https://example.com/dl?id=1&x=2").startswith("https://example.com/dl?")
