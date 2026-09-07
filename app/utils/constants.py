@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -9,8 +10,12 @@ ASSETS_DIR = BASE_DIR / "assets"
 STYLES_DIR = ASSETS_DIR / "styles"
 ICONS_DIR = ASSETS_DIR / "icons"
 
-DATA_DIR = BASE_DIR / "data"
-LOGS_DIR = BASE_DIR / "logs"
+_RUNTIME_DIR = Path(
+    os.environ.get("LOCALAPPDATA", BASE_DIR)
+) / APP_NAME
+
+DATA_DIR = _RUNTIME_DIR / "data"
+LOGS_DIR = _RUNTIME_DIR / "logs"
 
 DB_PATH = DATA_DIR / "vanta.db"
 LOG_PATH = LOGS_DIR / "vanta.log"

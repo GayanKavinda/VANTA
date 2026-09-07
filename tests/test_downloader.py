@@ -594,3 +594,113 @@ async def test_disk_error_classification(test_server, download_manager, tmp_path
 
     assert task.status == TaskStatus.FAILED
     assert task.error_type == DownloadErrorType.DISK
+
+
+@pytest.mark.asyncio
+async def test_speed_limit_zero_is_unlimited(download_manager):
+    download_manager.set_speed_limit(0)
+    assert download_manager._speed_limit_bytes_per_sec == 0
+
+
+@pytest.mark.asyncio
+async def test_speed_limit_negative_becomes_zero(download_manager):
+    download_manager.set_speed_limit(-100)
+    assert download_manager._speed_limit_bytes_per_sec == 0
+
+
+@pytest.mark.asyncio
+async def test_speed_limit_throttles_download(tmp_path):
+    from http.server import HTTPServer, SimpleHTTPRequestHandler
+    import threading
+
+    serve_dir = tmp_path / "serve"
+    serve_dir.mkdir()
+    test_data = b"X" * 50_000
+    test_file = serve_dir / "throttle.bin"
+    test_file.write_bytes(test_data)
+
+    class Handler(SimpleHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def translate_path(self, path):
+            import urllib.parse
+            path = urllib.parse.unquote(path)
+            path = path.split("?", 1)[0].split("#", 1)[0]
+            return os.path.join(str(serve_dir), path.lstrip("/"))
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    url = f"http://127.0.0.1:{port}/throttle.bin"
+
+    try:
+        dm = DownloadManager(max_concurrent=1)
+        dm.set_speed_limit(10_000)
+
+        dest = tmp_path / "throttle_download.bin"
+        task = await dm.add_download(
+            name="throttle.bin",
+            source_url=url,
+            download_url=url,
+            destination=str(dest),
+        )
+
+        start = time.monotonic()
+        assert await _wait_for_status(task, TaskStatus.COMPLETED, timeout=30.0)
+        elapsed = time.monotonic() - start
+
+        assert task.status == TaskStatus.COMPLETED
+        assert dest.exists()
+        assert dest.stat().st_size == 50_000
+        assert elapsed >= 4.0
+    finally:
+        server.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_speed_limit_change_during_download(test_server, download_manager, tmp_path):
+    dest = tmp_path / "downloads" / "dynamic_limit.bin"
+
+    task = await download_manager.add_download(
+        name="dynamic_limit.bin",
+        source_url=test_server["url"],
+        download_url=test_server["url"],
+        destination=str(dest),
+    )
+
+    while task.status == TaskStatus.QUEUED:
+        await asyncio.sleep(0.01)
+
+    download_manager.set_speed_limit(1024 * 1024)
+
+    assert await _wait_for_status(task, TaskStatus.COMPLETED)
+    assert task.status == TaskStatus.COMPLETED
+    assert dest.exists()
+    assert dest.stat().st_size == test_server["file_size"]
+
+
+@pytest.mark.asyncio
+async def test_speed_limit_does_not_break_resume(test_server, download_manager, tmp_path):
+    dest = tmp_path / "downloads" / "resume_limit.bin"
+    part_path = dest.with_suffix(dest.suffix + ".part")
+
+    partial_data = b"VANTA test download " * 10
+    part_path.parent.mkdir(parents=True, exist_ok=True)
+    part_path.write_bytes(partial_data)
+
+    download_manager.set_speed_limit(512 * 1024)
+
+    task = await download_manager.add_download(
+        name="resume_limit.bin",
+        source_url=test_server["url"],
+        download_url=test_server["url"],
+        destination=str(dest),
+    )
+
+    assert await _wait_for_status(task, TaskStatus.COMPLETED)
+    assert task.status == TaskStatus.COMPLETED
+    assert dest.exists()
+    assert dest.stat().st_size == test_server["file_size"]
+    assert dest.read_bytes() == test_server["file_path"].read_bytes()

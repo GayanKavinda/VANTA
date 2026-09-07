@@ -30,6 +30,7 @@ class DownloadManager:
         self._tasks: dict[str, asyncio.Task] = {}
         self._download_tasks: list[DownloadTask] = []
         self._callbacks: list[ProgressCallback] = []
+        self._speed_limit_bytes_per_sec: int = 0
 
     @property
     def download_tasks(self) -> list[DownloadTask]:
@@ -125,8 +126,10 @@ class DownloadManager:
         else:
             self._download_tasks.append(task)
 
-        self._emit_progress(task)
         changed = self._update_queue_positions()
+
+        self._emit_progress(task)
+
         for t in changed:
             if t.id != task.id:
                 self._emit_progress(t)
@@ -154,7 +157,7 @@ class DownloadManager:
             except Exception as e:
                 log.error("Download failed for '%s': %s", task.name, e, exc_info=True)
                 if task.error_type == DownloadErrorType.UNKNOWN:
-                    task.error_type = DownloadErrorType.NETWORK
+                    task.error_type = DownloadErrorType.UNKNOWN
                 self._set_status(task, TaskStatus.FAILED, str(e))
             finally:
                 self._tasks.pop(task.id, None)
@@ -275,6 +278,8 @@ class DownloadManager:
         last_emit = downloaded
         start_time = time.monotonic()
         last_flush = start_time
+        throttle_start = start_time
+        throttle_bytes = 0
 
         file_mode = "ab" if resume_position > 0 else "wb"
 
@@ -286,6 +291,7 @@ class DownloadManager:
 
                         session_downloaded += len(chunk)
                         downloaded += len(chunk)
+                        throttle_bytes += len(chunk)
                         elapsed = time.monotonic() - start_time
                         speed = session_downloaded / elapsed if elapsed > 0 else 0.0
 
@@ -298,6 +304,14 @@ class DownloadManager:
                         if downloaded - last_emit >= CHUNK_SIZE:
                             self._emit_progress(task)
                             last_emit = downloaded
+
+                        if self._speed_limit_bytes_per_sec > 0:
+                            throttle_elapsed = time.monotonic() - throttle_start
+                            expected_time = throttle_bytes / self._speed_limit_bytes_per_sec
+                            if throttle_elapsed < expected_time:
+                                await asyncio.sleep(expected_time - throttle_elapsed)
+                            throttle_start = time.monotonic()
+                            throttle_bytes = 0
 
                         now = time.monotonic()
                         if now - last_flush >= _FLUSH_INTERVAL:
@@ -348,8 +362,13 @@ class DownloadManager:
             asyncio_task.cancel()
 
     def set_max_concurrent(self, value: int):
+        if value == self._max_concurrent:
+            return
         self._max_concurrent = value
         self._semaphore = asyncio.Semaphore(value)
+
+    def set_speed_limit(self, bytes_per_sec: int):
+        self._speed_limit_bytes_per_sec = max(0, bytes_per_sec)
 
     def get_incomplete_downloads(self) -> list[DownloadTask]:
         return [

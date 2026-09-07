@@ -72,6 +72,7 @@ class MainWindow(QMainWindow):
         self.settings_page.set_services(
             self._app_state.download_manager,
             self._app_state.file_manager,
+            self._settings,
         )
 
         self.stacked_widget.addWidget(self.home_page)
@@ -97,6 +98,12 @@ class MainWindow(QMainWindow):
     def _init_services(self):
         max_concurrent = self._settings.max_concurrent()
         self._app_state.download_manager.set_max_concurrent(max_concurrent)
+
+        speed_limit_enabled = self._settings.get_bool("speed_limit_enabled")
+        speed_limit_value = self._settings.get_int("speed_limit_value", 0)
+        if speed_limit_enabled and speed_limit_value > 0:
+            self._app_state.download_manager.set_speed_limit(speed_limit_value * 1024 * 1024)
+
         self._persistence.subscribe_to(self._app_state.download_manager)
 
     def _restore_tasks(self):
@@ -148,6 +155,16 @@ class MainWindow(QMainWindow):
         log.info("Setting changed: %s = %s", key, value)
         if key == "max_concurrent":
             self._app_state.download_manager.set_max_concurrent(int(value))
+        elif key == "speed_limit_enabled":
+            enabled = value.lower() in ("true", "1", "yes")
+            speed_limit_value = self._settings.get_int("speed_limit_value", 0)
+            if enabled and speed_limit_value > 0:
+                self._app_state.download_manager.set_speed_limit(speed_limit_value * 1024 * 1024)
+            else:
+                self._app_state.download_manager.set_speed_limit(0)
+        elif key == "speed_limit_value":
+            if self._settings.get_bool("speed_limit_enabled"):
+                self._app_state.download_manager.set_speed_limit(int(value) * 1024 * 1024)
 
     async def _analyze_and_start(self, url: str):
         try:

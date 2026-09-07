@@ -1,7 +1,8 @@
 import time
+from pathlib import Path
 
 from app.core.task_manager import DownloadTask, DownloadErrorType, TaskStatus
-from app.database.connection import get_session
+from app.database.connection import get_session, init_db
 from app.database.models import DownloadRecord, SettingRecord
 from app.database.repositories import (
     save_download_task,
@@ -16,6 +17,7 @@ from sqlalchemy import inspect
 
 
 def _clean_db():
+    init_db()
     session = get_session()
     try:
         session.query(DownloadRecord).delete()
@@ -226,3 +228,19 @@ def test_load_download_tasks_handles_invalid_error_type(tmp_path):
             db.commit()
         finally:
             db.close()
+
+
+def test_runtime_data_path_under_localappdata():
+    from app.utils.constants import DB_PATH, LOGS_DIR, APP_NAME
+    import os
+
+    localappdata = os.environ.get("LOCALAPPDATA")
+    if localappdata:
+        expected_parent = Path(localappdata) / APP_NAME
+        assert expected_parent in DB_PATH.parents
+        assert expected_parent in LOGS_DIR.parents
+    else:
+        from app.utils.constants import BASE_DIR
+        expected_parent = BASE_DIR / APP_NAME
+        assert expected_parent in DB_PATH.parents
+        assert expected_parent in LOGS_DIR.parents

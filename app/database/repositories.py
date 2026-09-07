@@ -4,7 +4,7 @@ from typing import Optional
 from sqlalchemy import text
 
 from app.core.task_manager import DownloadTask, DownloadErrorType, TaskStatus
-from app.database.connection import get_session, engine
+from app.database.connection import get_session, engine, init_db
 from app.database.models import DownloadRecord, DownloadStatus
 from app.utils.logger import get_logger
 
@@ -12,6 +12,7 @@ log = get_logger("vanta.database.repositories")
 
 
 def _migrate_downloads_table():
+    init_db()
     with engine.connect() as conn:
         existing_columns = {
             row[1] for row in conn.execute(text("PRAGMA table_info(downloads)")).fetchall()

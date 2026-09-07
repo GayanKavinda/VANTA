@@ -19,6 +19,9 @@ def main():
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(APP_VERSION)
 
+    loop = QEventLoop(app)
+    asyncio.set_event_loop(loop)
+
     init_db()
 
     style_path = Path(__file__).parent / "assets" / "styles" / "main.qss"
@@ -27,9 +30,6 @@ def main():
 
     window = MainWindow()
     window.show()
-
-    loop = QEventLoop(app)
-    asyncio.set_event_loop(loop)
 
     with loop:
         loop.run_forever()

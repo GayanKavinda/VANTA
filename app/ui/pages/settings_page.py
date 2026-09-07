@@ -27,18 +27,20 @@ log = get_logger("vanta.ui.settings")
 class SettingsPage(QWidget):
     settings_changed = Signal(str, str)
 
-    def __init__(self):
+    def __init__(self, settings_service=None):
         super().__init__()
-        self._settings = SettingsService()
+        self._settings = settings_service or SettingsService()
         self._download_manager: DownloadManager | None = None
         self._file_manager: FileManager | None = None
 
         self._build_ui()
         self._load_values()
 
-    def set_services(self, download_manager: DownloadManager, file_manager: FileManager):
+    def set_services(self, download_manager: DownloadManager, file_manager: FileManager, settings_service=None):
         self._download_manager = download_manager
         self._file_manager = file_manager
+        if settings_service is not None:
+            self._settings = settings_service
 
     def _build_ui(self):
         main_layout = QVBoxLayout(self)
