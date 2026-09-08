@@ -121,7 +121,8 @@ class DownloadsPage(QWidget):
             card.resume_requested.connect(self._on_resume_clicked)
             card.cancel_requested.connect(self._on_cancel_clicked)
             card.retry_requested.connect(self._on_retry_clicked)
-            card.open_requested.connect(self._on_open_clicked)
+            card.open_requested.connect(self._on_open_folder_clicked)
+            card.open_file_requested.connect(self._on_open_file_clicked)
             card.remove_requested.connect(self._on_remove_clicked)
             self._cards[task.id] = card
             self._placeholder.setVisible(False)
@@ -238,7 +239,7 @@ class DownloadsPage(QWidget):
         if task is not None and task.status == TaskStatus.FAILED:
             controller.retry_download(task_id)
 
-    def _on_open_clicked(self, task_id: str):
+    def _on_open_folder_clicked(self, task_id: str):
         controller = self._queue_controller
         if controller is None:
             return
@@ -248,21 +249,23 @@ class DownloadsPage(QWidget):
             if dest_dir and os.path.isdir(dest_dir):
                 QDesktopServices.openUrl(QUrl.fromLocalFile(dest_dir))
 
-    def _on_remove_clicked(self, task_id: str):
+    def _on_open_file_clicked(self, task_id: str):
         controller = self._queue_controller
         if controller is None:
+            return
+        task = controller.find_task(task_id)
+        if task is not None:
+            dest_path = task.destination
+            if dest_path and os.path.isfile(dest_path):
+                QDesktopServices.openUrl(QUrl.fromLocalFile(dest_path))
+
+    def _on_remove_clicked(self, task_id: str):
+        if self._queue_controller is None:
             return
         card = self._cards.pop(task_id, None)
         if card is not None:
             card.deleteLater()
-
-        task = controller.find_task(task_id)
-        if task is not None and task.is_terminal:
-            manager = controller.download_manager
-            manager._download_tasks = [
-                t for t in manager.download_tasks if t.id != task_id
-            ]
-            controller._manager._tasks.pop(task_id, None)
+        self._queue_controller.remove_task(task_id)
 
         if not self._cards:
             self._placeholder.setVisible(True)

@@ -17,6 +17,7 @@ class DownloadCard(QFrame):
     cancel_requested = Signal(str)
     retry_requested = Signal(str)
     open_requested = Signal(str)
+    open_file_requested = Signal(str)
     remove_requested = Signal(str)
 
     STATUS_LABELS = {
@@ -111,6 +112,10 @@ class DownloadCard(QFrame):
         self._open_btn.setFixedSize(100, 32)
         self._open_btn.clicked.connect(lambda: self.open_requested.emit(self._task.id))
 
+        self._open_file_btn = QPushButton("Open File")
+        self._open_file_btn.setFixedSize(100, 32)
+        self._open_file_btn.clicked.connect(lambda: self.open_file_requested.emit(self._task.id))
+
         self._remove_btn = QPushButton("Remove")
         self._remove_btn.setFixedSize(90, 32)
         self._remove_btn.clicked.connect(lambda: self.remove_requested.emit(self._task.id))
@@ -166,6 +171,7 @@ class DownloadCard(QFrame):
             self._button_row.addWidget(self._retry_btn)
             self._button_row.addWidget(self._cancel_btn)
         elif task.status == TaskStatus.COMPLETED:
+            self._button_row.addWidget(self._open_file_btn)
             self._button_row.addWidget(self._open_btn)
             self._button_row.addWidget(self._remove_btn)
 

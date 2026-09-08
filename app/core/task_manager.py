@@ -97,14 +97,20 @@ class DownloadTask:
         return remaining / self.speed
 
     def format_eta(self) -> str:
-        """Return a human-readable ETA string, or ``""`` if unknown."""
+        """Return a human-readable ETA string, or ``""`` if unknown.
+
+        Supports durations longer than one hour (``H:MM:SS``).
+        """
         eta = self.eta_seconds
         if eta is None:
             return ""
         if eta <= 0:
             return "0:00"
-        minutes = int(eta // 60)
+        hours = int(eta // 3600)
+        minutes = int((eta % 3600) // 60)
         seconds = int(eta % 60)
+        if hours > 0:
+            return f"{hours}:{minutes:02d}:{seconds:02d}"
         return f"{minutes}:{seconds:02d}"
 
     def format_speed(self) -> str:

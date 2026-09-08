@@ -17,6 +17,7 @@ from typing import Callable, Optional
 
 from app.core.downloader import DownloadManager
 from app.core.task_manager import DownloadTask, DownloadErrorType, TaskStatus
+from app.database.repositories import delete_download_task
 from app.utils.logger import get_logger
 
 log = get_logger("vanta.core.queue_controller")
@@ -104,7 +105,7 @@ class QueueController:
         max_concurrent: int | None = None,
     ):
         self._manager = manager
-        self._max_concurrent = max_concurrent or manager._max_concurrent
+        self._max_concurrent = max_concurrent or manager.max_concurrent
         self._queue_callbacks: list[QueueChangeCallback] = []
         manager.add_progress_callback(self._on_manager_progress)
 
@@ -249,6 +250,20 @@ class QueueController:
         removed_ids = self._manager.clear_completed()
         self._emit_queue_change(None)
         return removed_ids
+
+    def remove_task(self, task_id: str) -> bool:
+        """Permanently remove a task from both the runtime and the database.
+
+        Returns ``True`` if a task was removed, ``False`` if not found.
+        """
+        removed = self._manager.remove_task(task_id)
+        if removed:
+            try:
+                delete_download_task(task_id)
+            except Exception as e:
+                log.error("Failed to delete task %s from database: %s", task_id, e)
+            self._emit_queue_change(None)
+        return removed
 
     # ── settings ──────────────────────────────────────────────────────
 

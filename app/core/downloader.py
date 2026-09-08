@@ -46,6 +46,10 @@ class DownloadManager:
     def download_tasks(self) -> list[DownloadTask]:
         return self._download_tasks
 
+    @property
+    def max_concurrent(self) -> int:
+        return self._max_concurrent
+
     def add_progress_callback(self, callback: ProgressCallback):
         self._callbacks.append(callback)
 
@@ -107,6 +111,33 @@ class DownloadManager:
             if task.id == task_id:
                 return task
         return None
+
+    def remove_task(self, task_id: str) -> bool:
+        """Remove a task from the download manager.
+
+        Cancels any in-flight asyncio task, removes the task from the
+        internal list, and emits progress so UI and persistence layers
+        are notified.
+        """
+        task = self.find_task(task_id)
+        if task is None:
+            return False
+
+        asyncio_task = self._tasks.pop(task_id, None)
+        if asyncio_task and not asyncio_task.done():
+            asyncio_task.cancel()
+
+        self._download_tasks = [
+            t for t in self._download_tasks if t.id != task_id
+        ]
+
+        changed = self._update_queue_positions()
+        self._emit_progress(task)
+        for t in changed:
+            if t.id != task_id:
+                self._emit_progress(t)
+
+        return True
 
     async def add_download(
         self,

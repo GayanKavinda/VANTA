@@ -97,6 +97,13 @@ def test_format_eta_minutes_and_seconds():
     assert task.format_eta() == "2:00"
 
 
+def test_format_eta_with_hours():
+    task = _make_task(speed=1, total_size=4000, downloaded_size=0)
+    task.status = TaskStatus.DOWNLOADING
+    # remaining = 4000 / 1 = 4000 s → 1:06:40
+    assert task.format_eta() == "1:06:40"
+
+
 # ── format_speed ─────────────────────────────────────────────────────────
 
 def test_format_speed_bytes():
