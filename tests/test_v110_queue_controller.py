@@ -311,7 +311,30 @@ def test_set_max_concurrent_updates_property(controller, manager):
 
 def test_set_max_concurrent_propagates_to_manager(controller, manager):
     controller.set_max_concurrent(5)
-    assert manager._max_concurrent == 5
+    assert manager.max_concurrent == 5
+
+
+def test_constructor_sets_initial_max_concurrent():
+    manager = DownloadManager(max_concurrent=3, allow_private_networks=True)
+    controller = QueueController(manager, max_concurrent=7)
+    assert controller.max_concurrent == 7
+    assert manager.max_concurrent == 7
+
+
+def test_controller_has_no_separate_max_concurrent_attribute(controller):
+    assert not hasattr(controller, "_max_concurrent")
+
+
+def test_max_concurrent_change_updates_available_slots(controller, manager):
+    manager._download_tasks = [
+        _make_task("a", status=TaskStatus.DOWNLOADING),
+        _make_task("b", status=TaskStatus.QUEUED),
+    ]
+    assert controller.available_slots == 2
+
+    controller.set_max_concurrent(4)
+    assert controller.available_slots == 3
+    assert manager.max_concurrent == 4
 
 
 # ── find_task / tasks ────────────────────────────────────────────────────
@@ -362,7 +385,6 @@ def test_cancel_download_terminal_is_noop(controller, manager):
 @pytest.mark.asyncio
 async def test_add_download_through_queue_controller(manager, tmp_path):
     controller = QueueController(manager)
-    controller._max_concurrent = 1
 
     task = await controller.add_download(
         name="test.zip",

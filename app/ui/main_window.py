@@ -104,7 +104,7 @@ class MainWindow(QMainWindow):
 
     def _init_services(self):
         max_concurrent = self._settings.max_concurrent()
-        self._app_state.download_manager.set_max_concurrent(max_concurrent)
+        self._queue_controller.set_max_concurrent(max_concurrent)
 
         speed_limit_enabled = self._settings.get_bool("speed_limit_enabled")
         speed_limit_value = self._settings.get_int("speed_limit_value", 0)
@@ -161,7 +161,7 @@ class MainWindow(QMainWindow):
     def _on_settings_changed(self, key: str, value: str):
         log.info("Setting changed: %s = %s", key, value)
         if key == "max_concurrent":
-            self._app_state.download_manager.set_max_concurrent(int(value))
+            self._queue_controller.set_max_concurrent(int(value))
         elif key == "speed_limit_enabled":
             enabled = value.lower() in ("true", "1", "yes")
             speed_limit_value = self._settings.get_int("speed_limit_value", 0)

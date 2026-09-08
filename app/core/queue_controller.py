@@ -105,7 +105,8 @@ class QueueController:
         max_concurrent: int | None = None,
     ):
         self._manager = manager
-        self._max_concurrent = max_concurrent or manager.max_concurrent
+        if max_concurrent is not None:
+            manager.set_max_concurrent(max_concurrent)
         self._queue_callbacks: list[QueueChangeCallback] = []
         manager.add_progress_callback(self._on_manager_progress)
 
@@ -121,7 +122,7 @@ class QueueController:
 
     @property
     def max_concurrent(self) -> int:
-        return self._max_concurrent
+        return self._manager.max_concurrent
 
     @property
     def active_count(self) -> int:
@@ -139,7 +140,7 @@ class QueueController:
 
     @property
     def available_slots(self) -> int:
-        return max(0, self._max_concurrent - self.active_count)
+        return max(0, self.max_concurrent - self.active_count)
 
     @property
     def incomplete_tasks(self) -> list[DownloadTask]:
@@ -268,7 +269,6 @@ class QueueController:
     # ── settings ──────────────────────────────────────────────────────
 
     def set_max_concurrent(self, value: int):
-        self._max_concurrent = value
         self._manager.set_max_concurrent(value)
         self._emit_queue_change(None)
 

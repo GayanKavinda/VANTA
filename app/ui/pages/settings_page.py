@@ -218,8 +218,6 @@ class SettingsPage(QWidget):
 
     def _on_concurrent_changed(self, value: int):
         self._settings.set("max_concurrent", value)
-        if self._download_manager:
-            self._download_manager.set_max_concurrent(value)
         self.settings_changed.emit("max_concurrent", str(value))
         log.info("Max concurrent downloads set to: %d", value)
 
