@@ -180,6 +180,38 @@ class DownloadManager:
 
         return task
 
+    def register_task(self, task: DownloadTask):
+        """Register a task without starting it.
+
+        Used by the scheduler to add tasks to the queue without
+        immediately creating an asyncio task.
+        """
+        if task in self._download_tasks:
+            idx = self._download_tasks.index(task)
+            self._download_tasks[idx] = task
+        else:
+            self._download_tasks.append(task)
+
+        changed = self._update_queue_positions()
+        self._emit_progress(task)
+        for t in changed:
+            if t.id != task.id:
+                self._emit_progress(t)
+
+    async def start_download(self, task: DownloadTask):
+        """Start an existing queued task.
+
+        This is called by the scheduler when a slot becomes available.
+        The task must already be in the download_tasks list with QUEUED status.
+        """
+        if task.id in self._tasks:
+            return
+
+        self._set_status(task, TaskStatus.QUEUED)
+
+        asyncio_task = asyncio.create_task(self._run(task))
+        self._tasks[task.id] = asyncio_task
+
     async def _run(self, task: DownloadTask):
         async with self._semaphore:
             was_paused = False

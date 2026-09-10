@@ -58,21 +58,31 @@ def test_available_slots_with_no_tasks(controller):
 
 
 def test_available_slots_decreases_with_active_tasks(controller, manager):
-    manager._download_tasks = [
-        _make_task("a", status=TaskStatus.DOWNLOADING),
-        _make_task("b", status=TaskStatus.PREPARING),
-    ]
+    # Add tasks through controller so scheduler tracks them
+    import asyncio
+    task_a = asyncio.run(controller.add_download("a", "http://example.com/a", "http://example.com/a", "/tmp/a"))
+    task_b = asyncio.run(controller.add_download("b", "http://example.com/b", "http://example.com/b", "/tmp/b"))
+    
+    # Manually set them to active status to simulate running downloads
+    task_a.status = TaskStatus.DOWNLOADING
+    task_b.status = TaskStatus.PREPARING
+    controller._scheduler._sync_active_tasks()
+    
     assert controller.active_count == 2
     assert controller.available_slots == 1
 
 
 def test_queued_count_tracking(controller, manager):
-    manager._download_tasks = [
-        _make_task("a", status=TaskStatus.DOWNLOADING),
-        _make_task("b", status=TaskStatus.QUEUED),
-        _make_task("c", status=TaskStatus.QUEUED),
-        _make_task("d", status=TaskStatus.PAUSED),
-    ]
+    import asyncio
+    task_a = asyncio.run(controller.add_download("a", "http://example.com/a", "http://example.com/a", "/tmp/a"))
+    task_b = asyncio.run(controller.add_download("b", "http://example.com/b", "http://example.com/b", "/tmp/b"))
+    task_c = asyncio.run(controller.add_download("c", "http://example.com/c", "http://example.com/c", "/tmp/c"))
+    task_d = asyncio.run(controller.add_download("d", "http://example.com/d", "http://example.com/d", "/tmp/d"))
+    
+    task_a.status = TaskStatus.DOWNLOADING
+    task_d.status = TaskStatus.PAUSED
+    controller._scheduler._sync_active_tasks()
+    
     assert controller.queued_count == 2
     assert controller.active_count == 1
 
@@ -326,10 +336,13 @@ def test_controller_has_no_separate_max_concurrent_attribute(controller):
 
 
 def test_max_concurrent_change_updates_available_slots(controller, manager):
-    manager._download_tasks = [
-        _make_task("a", status=TaskStatus.DOWNLOADING),
-        _make_task("b", status=TaskStatus.QUEUED),
-    ]
+    import asyncio
+    task_a = asyncio.run(controller.add_download("a", "http://example.com/a", "http://example.com/a", "/tmp/a"))
+    task_b = asyncio.run(controller.add_download("b", "http://example.com/b", "http://example.com/b", "/tmp/b"))
+    
+    task_a.status = TaskStatus.DOWNLOADING
+    controller._scheduler._sync_active_tasks()
+    
     assert controller.available_slots == 2
 
     controller.set_max_concurrent(4)
@@ -394,7 +407,8 @@ async def test_add_download_through_queue_controller(manager, tmp_path):
     )
 
     assert task in manager.download_tasks
-    assert task.status is TaskStatus.QUEUED
+    # Scheduler immediately starts the task since slots are available
+    assert task.status is TaskStatus.DOWNLOADING
     assert manager.find_task(task.id) is task
 
     # Clean up: cancel the asyncio task to avoid warnings

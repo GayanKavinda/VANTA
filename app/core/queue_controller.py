@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 from app.core.downloader import DownloadManager
+from app.core.scheduler import DownloadScheduler
 from app.core.task_manager import DownloadTask, DownloadErrorType, TaskStatus
 from app.database.repositories import delete_download_task
 from app.utils.logger import get_logger
@@ -97,6 +98,8 @@ class QueueController:
       ``available_slots`` for UI scheduling decisions.
     * **Queue change callbacks** — UI components subscribe to be
       notified whenever a task's lifecycle state changes.
+    * **Scheduler integration** — uses ``DownloadScheduler`` to control
+      which queued tasks are promoted to active downloads.
     """
 
     def __init__(
@@ -107,8 +110,21 @@ class QueueController:
         self._manager = manager
         if max_concurrent is not None:
             manager.set_max_concurrent(max_concurrent)
+
+        self._scheduler = DownloadScheduler(
+            manager,
+            on_status_change=self._on_scheduler_status_change,
+        )
         self._queue_callbacks: list[QueueChangeCallback] = []
         manager.add_progress_callback(self._on_manager_progress)
+
+        # Start the scheduler
+        self._scheduler.start()
+
+    def _on_scheduler_status_change(self, task: DownloadTask, status: TaskStatus):
+        """Called by scheduler when it changes a task's status."""
+        self._manager._set_status(task, status)
+        self._emit_queue_change(task)
 
     # ── properties ────────────────────────────────────────────────────
 
@@ -126,9 +142,7 @@ class QueueController:
 
     @property
     def active_count(self) -> int:
-        return sum(
-            1 for t in self._manager.download_tasks if t.is_active
-        )
+        return self._scheduler.active_count
 
     @property
     def queued_count(self) -> int:
@@ -140,7 +154,7 @@ class QueueController:
 
     @property
     def available_slots(self) -> int:
-        return max(0, self.max_concurrent - self.active_count)
+        return self._scheduler.available_slots
 
     @property
     def incomplete_tasks(self) -> list[DownloadTask]:
@@ -173,12 +187,18 @@ class QueueController:
         download_url: str,
         destination: str,
     ) -> DownloadTask:
-        task = await self._manager.add_download(
+        import uuid
+        task = DownloadTask(
+            id=uuid.uuid4().hex[:12],
             name=name,
             source_url=source_url,
             download_url=download_url,
             destination=destination,
         )
+
+        # Register the task without starting it - scheduler will handle promotion
+        self._manager.register_task(task)
+        self._scheduler.on_task_added(task)
         self._emit_queue_change(task)
         return task
 
@@ -200,28 +220,38 @@ class QueueController:
                 task, TaskStatus.PAUSED, "Download was paused"
             )
 
+        self._scheduler.on_task_status_changed(task, task.status)
         self._emit_queue_change(task)
 
     def resume_download(self, task: DownloadTask):
         if task.status not in (TaskStatus.PAUSED, TaskStatus.FAILED):
             return
         self._manager.resume_download(task)
+        self._scheduler.on_task_status_changed(task, task.status)
         self._emit_queue_change(task)
 
     def cancel_download(self, task: DownloadTask):
         if task.is_terminal:
             return
         self._manager.cancel_download(task)
+        self._scheduler.on_task_status_changed(task, task.status)
+        self._scheduler.on_task_removed(task.id)
         self._emit_queue_change(task)
 
     def retry_download(self, task_id: str):
         self._manager.retry_task(task_id)
         task = self._manager.find_task(task_id)
         if task is not None:
+            self._scheduler.on_task_added(task)
             self._emit_queue_change(task)
 
     def retry_failed(self):
         self._manager.retry_failed()
+        # Scheduler will pick up new queued tasks via on_task_added in retry_download
+        # but we need to manually check for any retried tasks
+        for task in self._manager.download_tasks:
+            if task.status == TaskStatus.QUEUED and task.id not in self._scheduler._scheduled_tasks:
+                self._scheduler.on_task_added(task)
         self._emit_queue_change(None)
 
     def pause_all(self):
@@ -233,12 +263,14 @@ class QueueController:
                 TaskStatus.VERIFYING,
             ):
                 self.pause_download(task)
+        self._scheduler.on_all_paused()
         self._emit_queue_change(None)
 
     def resume_all(self):
         for task in list(self._manager.download_tasks):
             if task.status == TaskStatus.PAUSED:
                 self.resume_download(task)
+        self._scheduler.on_all_paused()  # This will clear and reschedule
         self._emit_queue_change(None)
 
     def cancel_all(self):
@@ -249,6 +281,8 @@ class QueueController:
 
     def clear_completed(self) -> list[str]:
         removed_ids = self._manager.clear_completed()
+        for task_id in removed_ids:
+            self._scheduler.on_task_removed(task_id)
         self._emit_queue_change(None)
         return removed_ids
 
@@ -263,6 +297,7 @@ class QueueController:
                 delete_download_task(task_id)
             except Exception as e:
                 log.error("Failed to delete task %s from database: %s", task_id, e)
+            self._scheduler.on_task_removed(task_id)
             self._emit_queue_change(None)
         return removed
 
@@ -270,6 +305,7 @@ class QueueController:
 
     def set_max_concurrent(self, value: int):
         self._manager.set_max_concurrent(value)
+        self._scheduler.on_concurrency_changed()
         self._emit_queue_change(None)
 
     def set_speed_limit(self, bytes_per_sec: int):
@@ -294,4 +330,5 @@ class QueueController:
         ):
             task.error_type = classify_download_error(task)
 
+        self._scheduler.on_task_status_changed(task, task.status)
         self._emit_queue_change(task)
