@@ -82,10 +82,11 @@ class DownloadManager:
             t for t in self._download_tasks
             if t.status == TaskStatus.QUEUED
         ]
+        # Sort by queue_order then created_at for stable ordering
+        queued.sort(key=lambda t: (t.queue_order, t.created_at))
         for idx, task in enumerate(queued, start=1):
-            if task.queue_position != idx or task.queue_order != idx:
+            if task.queue_position != idx:
                 task.queue_position = idx
-                task.queue_order = idx
                 changed.append(task)
         for task in self._download_tasks:
             if task.status != TaskStatus.QUEUED and task.queue_position != 0:
@@ -205,12 +206,13 @@ class DownloadManager:
         The task must already be in the download_tasks list with QUEUED status.
         """
         if task.id in self._tasks:
-            return
+            return self._tasks[task.id]
 
         self._set_status(task, TaskStatus.QUEUED)
 
         asyncio_task = asyncio.create_task(self._run(task))
         self._tasks[task.id] = asyncio_task
+        return asyncio_task
 
     async def _run(self, task: DownloadTask):
         async with self._semaphore:
@@ -220,7 +222,7 @@ class DownloadManager:
             except asyncio.CancelledError:
                 if task.status == TaskStatus.PAUSED:
                     was_paused = True
-                else:
+                elif not task.is_terminal:
                     self._set_status(
                         task,
                         TaskStatus.CANCELLED,
@@ -229,13 +231,56 @@ class DownloadManager:
                 raise
             except Exception as e:
                 log.error("Download failed for '%s': %s", task.name, e, exc_info=True)
+                # Classify the exception if not already classified
                 if task.error_type == DownloadErrorType.UNKNOWN:
-                    task.error_type = DownloadErrorType.UNKNOWN
+                    task.error_type = self._classify_exception(e)
                 self._set_status(task, TaskStatus.FAILED, str(e))
             finally:
                 self._tasks.pop(task.id, None)
                 if not was_paused:
                     self._emit_progress(task)
+
+    def _classify_exception(self, exc: Exception) -> DownloadErrorType:
+        """Classify an exception into a DownloadErrorType."""
+        import httpx
+
+        # Timeout errors
+        if isinstance(exc, (httpx.TimeoutException, asyncio.TimeoutError)):
+            return DownloadErrorType.TIMEOUT
+
+        # Connection errors
+        if isinstance(exc, (httpx.ConnectError, ConnectionError, ConnectionResetError)):
+            return DownloadErrorType.CONNECTION_INTERRUPTED
+
+        # HTTP status errors (5xx, etc.)
+        if isinstance(exc, httpx.HTTPStatusError):
+            status = exc.response.status_code
+            if status >= 500:
+                return DownloadErrorType.SERVER_UNAVAILABLE
+            if status in (408, 429):  # Request timeout, Too Many Requests
+                return DownloadErrorType.TIMEOUT
+            if status in (403, 401):
+                return DownloadErrorType.ACCESS_DENIED
+            if status == 404:
+                return DownloadErrorType.NETWORK
+            return DownloadErrorType.NETWORK
+
+        # Network/connection related errors from httpx
+        if isinstance(exc, (httpx.NetworkError, httpx.ProtocolError)):
+            return DownloadErrorType.CONNECTION_INTERRUPTED
+
+        # OSError could be disk, network, etc.
+        if isinstance(exc, OSError):
+            msg = str(exc).lower()
+            if "no space" in msg or "disk full" in msg:
+                return DownloadErrorType.DISK
+            if "permission denied" in msg:
+                return DownloadErrorType.DISK
+            if "connection" in msg and ("reset" in msg or "refused" in msg):
+                return DownloadErrorType.CONNECTION_INTERRUPTED
+            return DownloadErrorType.DISK
+
+        return DownloadErrorType.UNKNOWN
 
     async def _execute_download(self, task: DownloadTask):
         from app.services.url_security import validate_url
@@ -256,11 +301,23 @@ class DownloadManager:
 
         dest_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # V1.13 — Check for existing complete destination file
+        if dest_path.exists() and dest_path.stat().st_size > 0:
+            task.error_type = DownloadErrorType.EXISTING_FILE
+            raise FileExistsError(f"Destination file already exists: {dest_path}")
+
         resume_position = 0
         if part_path.exists():
             resume_position = part_path.stat().st_size
             if resume_position > 0:
-                log.info("Resuming download from %d bytes", resume_position)
+                # V1.13 — Validate partial file before resuming
+                if not self._is_partial_file_valid(part_path, resume_position):
+                    task.error_type = DownloadErrorType.CORRUPT_PARTIAL
+                    log.warning("Corrupt partial file detected, removing: %s", part_path)
+                    part_path.unlink(missing_ok=True)
+                    resume_position = 0
+                else:
+                    log.info("Resuming download from %d bytes", resume_position)
 
         async with httpx.AsyncClient(
             follow_redirects=False,
@@ -455,6 +512,27 @@ class DownloadManager:
         except Exception:
             return False
 
+    def _is_partial_file_valid(self, part_path: Path, expected_size: int) -> bool:
+        """Validate a partial file before resuming.
+        
+        Basic validation: file exists, has expected size, and is readable.
+        More sophisticated validation (checksums) could be added later.
+        """
+        try:
+            if not part_path.exists():
+                return False
+            actual_size = part_path.stat().st_size
+            if actual_size != expected_size:
+                return False
+            if actual_size == 0:
+                return False
+            # Try to read a byte to ensure file is readable
+            with open(part_path, "rb") as f:
+                f.read(1)
+            return True
+        except Exception:
+            return False
+
     def pause_download(self, task: DownloadTask):
         asyncio_task = self._tasks.get(task.id)
         if asyncio_task and not asyncio_task.done():
@@ -476,6 +554,17 @@ class DownloadManager:
         asyncio_task = self._tasks.get(task.id)
         if asyncio_task and not asyncio_task.done():
             asyncio_task.cancel()
+
+    def cancel_task_async(self, task_id: str) -> bool:
+        """Cancel the asyncio task for a given task ID.
+        
+        Returns True if a task was found and cancelled, False otherwise.
+        """
+        asyncio_task = self._tasks.pop(task_id, None)
+        if asyncio_task and not asyncio_task.done():
+            asyncio_task.cancel()
+            return True
+        return False
 
     def set_max_concurrent(self, value: int):
         if value == self._max_concurrent:
@@ -542,22 +631,48 @@ class DownloadManager:
         dest_path = Path(task.destination)
         part_path = dest_path.with_suffix(dest_path.suffix + ".part")
         has_part = part_path.exists() and part_path.stat().st_size > 0
+
+        # V1.13 — Classify errors as transient (retryable) vs permanent (non-retryable)
+        transient_errors = (
+            DownloadErrorType.TIMEOUT,
+            DownloadErrorType.CONNECTION_INTERRUPTED,
+            DownloadErrorType.SERVER_UNAVAILABLE,
+            DownloadErrorType.NETWORK,
+        )
+        permanent_errors = (
+            DownloadErrorType.HTML_RESPONSE,
+            DownloadErrorType.ACCESS_DENIED,
+            DownloadErrorType.RANGE_UNSUPPORTED,
+            DownloadErrorType.UNSAFE_REDIRECT,
+            DownloadErrorType.REDIRECT_LOOP,
+            DownloadErrorType.EXISTING_FILE,
+            DownloadErrorType.CORRUPT_PARTIAL,
+            DownloadErrorType.VERIFICATION,
+        )
+        is_transient = task.error_type in transient_errors
+        is_permanent = task.error_type in permanent_errors
+
+        # Can resume if: has valid partial, supports resume, and error is transient or unknown
         can_resume = (
             has_part
             and task.supports_resume
-            and task.error_type not in (
-                DownloadErrorType.HTML_RESPONSE,
-                DownloadErrorType.ACCESS_DENIED,
-                DownloadErrorType.RANGE_UNSUPPORTED,
-            )
+            and not is_permanent
         )
 
-        if can_resume:
+        if can_resume and is_transient:
+            # Transient error with valid partial - resume from where we left off
+            task.status = TaskStatus.PAUSED
+            task.error = None
+            task.error_type = DownloadErrorType.UNKNOWN
+            self.resume_download(task)
+        elif can_resume and task.error_type == DownloadErrorType.UNKNOWN:
+            # Unknown error but valid partial - try to resume
             task.status = TaskStatus.PAUSED
             task.error = None
             task.error_type = DownloadErrorType.UNKNOWN
             self.resume_download(task)
         else:
+            # Permanent error or no valid partial - restart from scratch
             part_path.unlink(missing_ok=True)
             dest_path.unlink(missing_ok=True)
             task.downloaded_size = 0

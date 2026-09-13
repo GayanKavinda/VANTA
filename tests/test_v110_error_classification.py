@@ -105,3 +105,83 @@ def test_classify_disk_file_not_found():
     task = _task(error="[Errno 2] No such file or directory: '/tmp/missing.part'")
     result = classify_download_error(task)
     assert result is DownloadErrorType.DISK
+
+
+# ── V1.13 — New failure classifications ──────────────────────────────────
+
+def test_classify_timeout():
+    task = _task(error="Read timeout after 60 seconds")
+    result = classify_download_error(task)
+    assert result is DownloadErrorType.TIMEOUT
+
+
+def test_classify_timeout_timed_out():
+    task = _task(error="Connection timed out")
+    result = classify_download_error(task)
+    assert result is DownloadErrorType.TIMEOUT
+
+
+def test_classify_connection_interrupted():
+    task = _task(error="Connection reset by peer")
+    result = classify_download_error(task)
+    assert result is DownloadErrorType.CONNECTION_INTERRUPTED
+
+
+def test_classify_connection_aborted():
+    task = _task(error="Connection aborted")
+    result = classify_download_error(task)
+    assert result is DownloadErrorType.CONNECTION_INTERRUPTED
+
+
+def test_classify_connection_broken():
+    task = _task(error="Broken pipe")
+    result = classify_download_error(task)
+    assert result is DownloadErrorType.CONNECTION_INTERRUPTED
+
+
+def test_classify_server_unavailable_503():
+    task = _task(error="503 Service Unavailable")
+    result = classify_download_error(task)
+    assert result is DownloadErrorType.SERVER_UNAVAILABLE
+
+
+def test_classify_server_unavailable_502():
+    task = _task(error="502 Bad Gateway")
+    result = classify_download_error(task)
+    assert result is DownloadErrorType.SERVER_UNAVAILABLE
+
+
+def test_classify_server_unavailable_504():
+    task = _task(error="504 Gateway Timeout")
+    result = classify_download_error(task)
+    assert result is DownloadErrorType.SERVER_UNAVAILABLE
+
+
+def test_classify_connection_refused():
+    task = _task(error="Connection refused")
+    result = classify_download_error(task)
+    assert result is DownloadErrorType.SERVER_UNAVAILABLE
+
+
+def test_classify_existing_file():
+    task = _task(error="File exists: /path/to/file.zip")
+    result = classify_download_error(task)
+    assert result is DownloadErrorType.EXISTING_FILE
+
+
+def test_classify_already_exists():
+    task = _task(error="Destination already exists")
+    result = classify_download_error(task)
+    assert result is DownloadErrorType.EXISTING_FILE
+
+
+def test_classify_corrupt_partial():
+    task = _task(error="Corrupt partial file detected")
+    result = classify_download_error(task)
+    assert result is DownloadErrorType.CORRUPT_PARTIAL
+
+
+def test_classify_checksum_mismatch():
+    task = _task(error="Checksum mismatch on partial file")
+    result = classify_download_error(task)
+    assert result is DownloadErrorType.CORRUPT_PARTIAL

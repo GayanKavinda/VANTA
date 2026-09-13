@@ -26,6 +26,13 @@ class DownloadErrorType(enum.Enum):
     UNSAFE_REDIRECT = "unsafe_redirect"
     UNKNOWN = "unknown"
 
+    # V1.13 — more granular failure classifications
+    TIMEOUT = "timeout"
+    CONNECTION_INTERRUPTED = "connection_interrupted"
+    SERVER_UNAVAILABLE = "server_unavailable"
+    EXISTING_FILE = "existing_file"
+    CORRUPT_PARTIAL = "corrupt_partial"
+
 
 @dataclass
 class DownloadTask:

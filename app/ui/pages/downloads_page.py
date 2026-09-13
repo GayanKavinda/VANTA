@@ -124,6 +124,10 @@ class DownloadsPage(QWidget):
             card.open_requested.connect(self._on_open_folder_clicked)
             card.open_file_requested.connect(self._on_open_file_clicked)
             card.remove_requested.connect(self._on_remove_clicked)
+            card.move_up_requested.connect(self._on_move_up_clicked)
+            card.move_down_requested.connect(self._on_move_down_clicked)
+            card.move_top_requested.connect(self._on_move_top_clicked)
+            card.move_bottom_requested.connect(self._on_move_bottom_clicked)
             self._cards[task.id] = card
             self._placeholder.setVisible(False)
             self._content_layout.insertWidget(
@@ -238,6 +242,30 @@ class DownloadsPage(QWidget):
         task = controller.find_task(task_id)
         if task is not None and task.status == TaskStatus.FAILED:
             controller.retry_download(task_id)
+
+    def _on_move_up_clicked(self, task_id: str):
+        controller = self._queue_controller
+        if controller is None:
+            return
+        controller.move_task_up(task_id)
+
+    def _on_move_down_clicked(self, task_id: str):
+        controller = self._queue_controller
+        if controller is None:
+            return
+        controller.move_task_down(task_id)
+
+    def _on_move_top_clicked(self, task_id: str):
+        controller = self._queue_controller
+        if controller is None:
+            return
+        controller.move_task_to_top(task_id)
+
+    def _on_move_bottom_clicked(self, task_id: str):
+        controller = self._queue_controller
+        if controller is None:
+            return
+        controller.move_task_to_bottom(task_id)
 
     def _on_open_folder_clicked(self, task_id: str):
         controller = self._queue_controller

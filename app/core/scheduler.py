@@ -114,7 +114,7 @@ class DownloadScheduler:
         self._active_tasks.add(task.id)
 
         if self._on_status_change:
-            self._on_status_change(task, TaskStatus.DOWNLOADING)
+            self._on_status_change(task, task.status)  # Notify of admission, don't set status
 
         # Fire and forget - manager handles the actual execution
         asyncio.create_task(self._run_task(task))
@@ -150,9 +150,11 @@ class DownloadScheduler:
 
         if was_active and not is_now_active:
             self._active_tasks.discard(task.id)
-            # Also remove from scheduled if terminal
-            if task.is_terminal:
+            # Remove from scheduled for any non-active state (paused, terminal)
+            if task.status in (TaskStatus.PAUSED, TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED):
                 self._scheduled_tasks.discard(task.id)
+            # Cancel the manager's async task to release semaphore
+            self._manager.cancel_task_async(task.id)
             if self._running:
                 self._schedule_pending()
 
@@ -179,7 +181,30 @@ class DownloadScheduler:
         if self._running:
             self._schedule_pending()
 
+    def is_task_scheduled(self, task_id: str) -> bool:
+        """Check if a task is currently scheduled (admitted or queued for admission)."""
+        return task_id in self._scheduled_tasks
+
+    def on_queue_reordered(self):
+        """Called when queue order changes. Re-evaluate which tasks should be scheduled."""
+        if not self._running:
+            return
+        # Clear scheduled tracking for queued tasks that are NOT already active.
+        # Tasks already in _active_tasks have been admitted and should not be re-selected.
+        queued_task_ids = {t.id for t in self.queued_tasks}
+        # Only remove from scheduled if not already active (admitted)
+        for task_id in queued_task_ids:
+            if task_id not in self._active_tasks:
+                self._scheduled_tasks.discard(task_id)
+        self._schedule_pending()
+
     def on_all_paused(self):
-        """Called when pause_all() is invoked."""
+        """Called when pause_all() is invoked. Clears all tracking."""
         self._active_tasks.clear()
         self._scheduled_tasks.clear()
+
+    def reschedule(self):
+        """Reschedule queued tasks after pause_all/resume_all or restore."""
+        if not self._running:
+            return
+        self._schedule_pending()

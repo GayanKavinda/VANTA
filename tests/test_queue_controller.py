@@ -768,7 +768,8 @@ def test_set_status_emits_changed_queue_tasks(queue_manager):
     assert a in emitted
     assert b in emitted
     assert b.queue_position == 1
-    assert b.queue_order == 1
+    # queue_order is stable, not rebuilt
+    assert b.queue_order == 2
 
     queue_manager.remove_progress_callback(lambda t: emitted.append(t))
 

@@ -19,6 +19,10 @@ class DownloadCard(QFrame):
     open_requested = Signal(str)
     open_file_requested = Signal(str)
     remove_requested = Signal(str)
+    move_up_requested = Signal(str)
+    move_down_requested = Signal(str)
+    move_top_requested = Signal(str)
+    move_bottom_requested = Signal(str)
 
     STATUS_LABELS = {
         TaskStatus.QUEUED: "Queued",
@@ -88,6 +92,32 @@ class DownloadCard(QFrame):
         self._error_label.hide()
         layout.addWidget(self._error_label)
 
+        self._queue_action_row = QHBoxLayout()
+        self._queue_action_row.setSpacing(8)
+        self._queue_action_row.addStretch(1)
+
+        self._move_up_btn = QPushButton("Move Up")
+        self._move_up_btn.setFixedSize(80, 28)
+        self._move_up_btn.clicked.connect(lambda: self.move_up_requested.emit(self._task.id))
+        self._queue_action_row.addWidget(self._move_up_btn)
+
+        self._move_down_btn = QPushButton("Move Down")
+        self._move_down_btn.setFixedSize(80, 28)
+        self._move_down_btn.clicked.connect(lambda: self.move_down_requested.emit(self._task.id))
+        self._queue_action_row.addWidget(self._move_down_btn)
+
+        self._move_top_btn = QPushButton("Move to Top")
+        self._move_top_btn.setFixedSize(90, 28)
+        self._move_top_btn.clicked.connect(lambda: self.move_top_requested.emit(self._task.id))
+        self._queue_action_row.addWidget(self._move_top_btn)
+
+        self._move_bottom_btn = QPushButton("Move to Bottom")
+        self._move_bottom_btn.setFixedSize(100, 28)
+        self._move_bottom_btn.clicked.connect(lambda: self.move_bottom_requested.emit(self._task.id))
+        self._queue_action_row.addWidget(self._move_bottom_btn)
+
+        layout.addLayout(self._queue_action_row)
+
         self._button_row = QHBoxLayout()
         self._button_row.setSpacing(8)
         self._button_row.addStretch(1)
@@ -126,7 +156,9 @@ class DownloadCard(QFrame):
         self._task = task
 
         self._name_label.setText(task.name)
-        self._status_label.setText(self.STATUS_LABELS.get(task.status, task.status.value))
+
+        status_text = self._get_status_text(task)
+        self._status_label.setText(status_text)
         self._progress_bar.setValue(int(task.progress))
 
         self._size_label.setText(self._format_size(task))
@@ -144,8 +176,12 @@ class DownloadCard(QFrame):
         else:
             self._error_label.hide()
 
-        if task.status == TaskStatus.QUEUED and task.queue_position > 0:
-            self._status_label.setText(f"Queued · #{task.queue_position}")
+        # Show/hide queue action buttons for queued tasks
+        is_queued = task.status == TaskStatus.QUEUED
+        self._move_up_btn.setVisible(is_queued)
+        self._move_down_btn.setVisible(is_queued)
+        self._move_top_btn.setVisible(is_queued)
+        self._move_bottom_btn.setVisible(is_queued)
 
         for button in (
             self._pause_btn,
@@ -153,6 +189,7 @@ class DownloadCard(QFrame):
             self._cancel_btn,
             self._retry_btn,
             self._open_btn,
+            self._open_file_btn,
             self._remove_btn,
         ):
             self._button_row.removeWidget(button)
@@ -174,6 +211,22 @@ class DownloadCard(QFrame):
             self._button_row.addWidget(self._open_file_btn)
             self._button_row.addWidget(self._open_btn)
             self._button_row.addWidget(self._remove_btn)
+
+    def _get_status_text(self, task: DownloadTask) -> str:
+        if task.status == TaskStatus.QUEUED:
+            if task.queue_position > 0:
+                return f"Queued\nPosition #{task.queue_position}\nWaiting for available slot"
+            return "Queued\nWaiting for available slot"
+        elif task.status == TaskStatus.PAUSED:
+            return "Paused\nUser paused"
+        elif task.status == TaskStatus.COMPLETED:
+            return "Completed\nFinished"
+        elif task.status == TaskStatus.FAILED:
+            return "Failed\nDownload failed"
+        elif task.status == TaskStatus.CANCELLED:
+            return "Cancelled\nDownload cancelled"
+        else:
+            return self.STATUS_LABELS.get(task.status, task.status.value)
 
     @staticmethod
     def _format_size(task: DownloadTask) -> str:

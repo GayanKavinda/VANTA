@@ -66,8 +66,48 @@ def classify_download_error(task: DownloadTask) -> DownloadErrorType:
     if "416" in msg or "not satisfiable" in msg or "range unsupported" in msg:
         return DownloadErrorType.RANGE_UNSUPPORTED
 
+    # V1.13 — Network failure classifications (order matters: more specific first)
+    # Server unavailable (5xx, connection refused, etc.) - check before timeout
+    if (
+        "503" in msg
+        or "502" in msg
+        or "504" in msg
+        or "connection refused" in msg
+        or "service unavailable" in msg
+        or "bad gateway" in msg
+        or "gateway timeout" in msg
+    ):
+        return DownloadErrorType.SERVER_UNAVAILABLE
+
+    # Timeout
+    if "timeout" in msg or "timed out" in msg:
+        return DownloadErrorType.TIMEOUT
+
+    # Connection interrupted
+    if (
+        "connection" in msg
+        and ("reset" in msg or "aborted" in msg or "broken" in msg or "closed" in msg)
+    ):
+        return DownloadErrorType.CONNECTION_INTERRUPTED
+
+    # Broken pipe (often appears without "connection")
+    if "broken pipe" in msg:
+        return DownloadErrorType.CONNECTION_INTERRUPTED
+
     # Post-download
-    if "verification" in msg or "checksum" in msg:
+    if "verification" in msg:
+        return DownloadErrorType.VERIFICATION
+
+    # V1.13 — Existing file conflict
+    if "file exists" in msg or "already exists" in msg:
+        return DownloadErrorType.EXISTING_FILE
+
+    # V1.13 — Corrupt partial file (checksum mismatch specific to partial)
+    if "corrupt" in msg or "mismatch" in msg or "hash" in msg:
+        return DownloadErrorType.CORRUPT_PARTIAL
+
+    # Checksum (after corrupt/mismatch checks)
+    if "checksum" in msg:
         return DownloadErrorType.VERIFICATION
 
     # Filesystem
@@ -121,9 +161,20 @@ class QueueController:
         # Start the scheduler
         self._scheduler.start()
 
+    def _next_queue_order_value(self) -> int:
+        """Return the next queue_order value for a new queued task."""
+        if not self._manager.download_tasks:
+            return 0
+        return max(task.queue_order for task in self._manager.download_tasks) + 1
+
     def _on_scheduler_status_change(self, task: DownloadTask, status: TaskStatus):
-        """Called by scheduler when it changes a task's status."""
-        self._manager._set_status(task, status)
+        """Called by scheduler when it admits a task for execution.
+        
+        The scheduler uses this to track its internal state. The actual
+        status transitions (QUEUED -> PREPARING -> DOWNLOADING) are
+        managed by DownloadManager.start_download() and _run().
+        """
+        # Scheduler internally tracks admission; don't override manager's status
         self._emit_queue_change(task)
 
     # ── properties ────────────────────────────────────────────────────
@@ -195,6 +246,8 @@ class QueueController:
             download_url=download_url,
             destination=destination,
         )
+        # Assign queue_order before registering
+        task.queue_order = self._next_queue_order_value()
 
         # Register the task without starting it - scheduler will handle promotion
         self._manager.register_task(task)
@@ -242,6 +295,8 @@ class QueueController:
         self._manager.retry_task(task_id)
         task = self._manager.find_task(task_id)
         if task is not None:
+            # Assign queue_order from monotonic counter (end of queue)
+            task.queue_order = self._next_queue_order_value()
             self._scheduler.on_task_added(task)
             self._emit_queue_change(task)
 
@@ -250,9 +305,13 @@ class QueueController:
         # Scheduler will pick up new queued tasks via on_task_added in retry_download
         # but we need to manually check for any retried tasks
         for task in self._manager.download_tasks:
-            if task.status == TaskStatus.QUEUED and task.id not in self._scheduler._scheduled_tasks:
+            if task.status == TaskStatus.QUEUED and not self._scheduler.is_task_scheduled(task.id):
+                # Assign queue_order if not already set
+                if task.queue_order == 0:
+                    task.queue_order = self._next_queue_order_value()
                 self._scheduler.on_task_added(task)
         self._emit_queue_change(None)
+        self._scheduler.on_queue_reordered()
 
     def pause_all(self):
         for task in list(self._manager.download_tasks):
@@ -270,7 +329,7 @@ class QueueController:
         for task in list(self._manager.download_tasks):
             if task.status == TaskStatus.PAUSED:
                 self.resume_download(task)
-        self._scheduler.on_all_paused()  # This will clear and reschedule
+        self._scheduler.reschedule()
         self._emit_queue_change(None)
 
     def cancel_all(self):
@@ -284,7 +343,87 @@ class QueueController:
         for task_id in removed_ids:
             self._scheduler.on_task_removed(task_id)
         self._emit_queue_change(None)
+        self._scheduler.on_queue_reordered()
         return removed_ids
+
+    # ── queue reordering ────────────────────────────────────────────────
+
+    def _get_queued_tasks_sorted(self) -> list[DownloadTask]:
+        """Return queued tasks sorted by queue_order then created_at."""
+        return sorted(
+            [t for t in self._manager.download_tasks if t.status == TaskStatus.QUEUED],
+            key=lambda t: (t.queue_order, t.created_at),
+        )
+
+    def _rebuild_queue_order(self):
+        """Rebuild queue_order for all queued tasks to be sequential 0..N-1."""
+        queued = self._get_queued_tasks_sorted()
+        for idx, task in enumerate(queued):
+            task.queue_order = idx
+
+    def move_task_up(self, task_id: str) -> bool:
+        """Move a queued task up one position in the queue."""
+        queued = self._get_queued_tasks_sorted()
+        idx = next((i for i, t in enumerate(queued) if t.id == task_id), -1)
+        if idx <= 0:
+            return False
+        # Swap queue_order with previous task
+        queued[idx].queue_order, queued[idx - 1].queue_order = (
+            queued[idx - 1].queue_order,
+            queued[idx].queue_order,
+        )
+        self._emit_queue_change(None)
+        self._scheduler.on_queue_reordered()
+        return True
+
+    def move_task_down(self, task_id: str) -> bool:
+        """Move a queued task down one position in the queue."""
+        queued = self._get_queued_tasks_sorted()
+        idx = next((i for i, t in enumerate(queued) if t.id == task_id), -1)
+        if idx < 0 or idx >= len(queued) - 1:
+            return False
+        # Swap queue_order with next task
+        queued[idx].queue_order, queued[idx + 1].queue_order = (
+            queued[idx + 1].queue_order,
+            queued[idx].queue_order,
+        )
+        self._emit_queue_change(None)
+        self._scheduler.on_queue_reordered()
+        return True
+
+    def move_task_to_top(self, task_id: str) -> bool:
+        """Move a queued task to the top of the queue."""
+        queued = self._get_queued_tasks_sorted()
+        idx = next((i for i, t in enumerate(queued) if t.id == task_id), -1)
+        if idx <= 0:
+            return False
+        task = queued.pop(idx)
+        queued.insert(0, task)
+        for i, t in enumerate(queued):
+            t.queue_order = i
+        self._emit_queue_change(None)
+        self._scheduler.on_queue_reordered()
+        return True
+
+    def move_task_to_bottom(self, task_id: str) -> bool:
+        """Move a queued task to the bottom of the queue."""
+        queued = self._get_queued_tasks_sorted()
+        idx = next((i for i, t in enumerate(queued) if t.id == task_id), -1)
+        if idx < 0 or idx >= len(queued) - 1:
+            return False
+        task = queued.pop(idx)
+        queued.append(task)
+        for i, t in enumerate(queued):
+            t.queue_order = i
+        self._emit_queue_change(None)
+        self._scheduler.on_queue_reordered()
+        return True
+
+    def get_queue_position(self, task_id: str) -> int | None:
+        """Get the 1-based queue position of a queued task, or None if not queued."""
+        queued = self._get_queued_tasks_sorted()
+        idx = next((i for i, t in enumerate(queued) if t.id == task_id), -1)
+        return idx + 1 if idx >= 0 else None
 
     def remove_task(self, task_id: str) -> bool:
         """Permanently remove a task from both the runtime and the database.
@@ -298,7 +437,10 @@ class QueueController:
             except Exception as e:
                 log.error("Failed to delete task %s from database: %s", task_id, e)
             self._scheduler.on_task_removed(task_id)
+            # Rebuild queue order for remaining queued tasks
+            self._rebuild_queue_order()
             self._emit_queue_change(None)
+            self._scheduler.on_queue_reordered()
         return removed
 
     # ── settings ──────────────────────────────────────────────────────
@@ -317,6 +459,10 @@ class QueueController:
         self, tasks: list[DownloadTask]
     ) -> list[DownloadTask]:
         interrupted = self._manager.restore_tasks(tasks)
+        # Wake scheduler for any restored queued tasks
+        for task in self._manager.download_tasks:
+            if task.status == TaskStatus.QUEUED and task.id not in self._scheduler._scheduled_tasks:
+                self._scheduler.on_task_added(task)
         self._emit_queue_change(None)
         return interrupted
 

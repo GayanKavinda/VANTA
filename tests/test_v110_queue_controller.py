@@ -6,6 +6,7 @@ without requiring a live HTTP server.
 """
 from __future__ import annotations
 
+import asyncio
 import pytest
 
 from app.core.downloader import DownloadManager
@@ -408,10 +409,260 @@ async def test_add_download_through_queue_controller(manager, tmp_path):
 
     assert task in manager.download_tasks
     # Scheduler immediately starts the task since slots are available
-    assert task.status is TaskStatus.DOWNLOADING
+    # Wait for scheduler to start the task
+    await asyncio.sleep(0.05)
+    assert task.is_active  # Task should be in active state (PREPARING or DOWNLOADING)
     assert manager.find_task(task.id) is task
 
     # Clean up: cancel the asyncio task to avoid warnings
     asyncio_task = manager._tasks.get(task.id)
     if asyncio_task and not asyncio_task.done():
         asyncio_task.cancel()
+
+
+# ── V1.12 Queue Reordering ───────────────────────────────────────────────
+
+@pytest.fixture
+def controller_with_queue(manager):
+    """Controller with multiple queued tasks for reordering tests."""
+    controller = QueueController(manager, max_concurrent=1)
+    return controller
+
+
+@pytest.mark.asyncio
+async def test_add_download_assigns_queue_order(controller_with_queue, tmp_path):
+    """New queued tasks should get sequential queue_order."""
+    task1 = await controller_with_queue.add_download("1", "http://1", "http://1", str(tmp_path / "1"))
+    task2 = await controller_with_queue.add_download("2", "http://2", "http://2", str(tmp_path / "2"))
+    task3 = await controller_with_queue.add_download("3", "http://3", "http://3", str(tmp_path / "3"))
+
+    assert task1.queue_order == 0
+    assert task2.queue_order == 1
+    assert task3.queue_order == 2
+
+
+@pytest.mark.asyncio
+async def test_get_queue_position(controller_with_queue, tmp_path):
+    """get_queue_position returns 1-based position for queued tasks."""
+    task1 = await controller_with_queue.add_download("1", "http://1", "http://1", str(tmp_path / "1"))
+    task2 = await controller_with_queue.add_download("2", "http://2", "http://2", str(tmp_path / "2"))
+    task3 = await controller_with_queue.add_download("3", "http://3", "http://3", str(tmp_path / "3"))
+
+    # Wait for scheduler to start first task (max_concurrent=1)
+    await asyncio.sleep(0.05)
+
+    # task1 should be active, task2 and task3 queued
+    assert task1.is_active
+    assert task2.status == TaskStatus.QUEUED
+    assert task3.status == TaskStatus.QUEUED
+
+    # Queue positions should be 1 and 2 for the queued tasks
+    assert controller_with_queue.get_queue_position(task2.id) == 1
+    assert controller_with_queue.get_queue_position(task3.id) == 2
+    assert controller_with_queue.get_queue_position(task1.id) is None  # active, not queued
+
+
+@pytest.mark.asyncio
+async def test_move_task_up(controller_with_queue, tmp_path):
+    """Moving a task up swaps its position with the previous task."""
+    task1 = await controller_with_queue.add_download("1", "http://1", "http://1", str(tmp_path / "1"))
+    task2 = await controller_with_queue.add_download("2", "http://2", "http://2", str(tmp_path / "2"))
+    task3 = await controller_with_queue.add_download("3", "http://3", "http://3", str(tmp_path / "3"))
+
+    await asyncio.sleep(0.05)  # task1 starts
+
+    # Move task3 up (from position 2 to position 1)
+    result = controller_with_queue.move_task_up(task3.id)
+    assert result is True
+
+    # Queue should now be: task3 (pos 1), task2 (pos 2)
+    assert controller_with_queue.get_queue_position(task3.id) == 1
+    assert controller_with_queue.get_queue_position(task2.id) == 2
+
+    # Move task3 up again (already at top)
+    result = controller_with_queue.move_task_up(task3.id)
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_move_task_up_at_top_returns_false(controller_with_queue, tmp_path):
+    """Moving the first queued task up returns False."""
+    task1 = await controller_with_queue.add_download("1", "http://1", "http://1", str(tmp_path / "1"))
+    task2 = await controller_with_queue.add_download("2", "http://2", "http://2", str(tmp_path / "2"))
+
+    await asyncio.sleep(0.05)  # task1 starts
+
+    # task2 is at position 1 (first in queue)
+    result = controller_with_queue.move_task_up(task2.id)
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_move_task_down(controller_with_queue, tmp_path):
+    """Moving a task down swaps its position with the next task."""
+    task1 = await controller_with_queue.add_download("1", "http://1", "http://1", str(tmp_path / "1"))
+    task2 = await controller_with_queue.add_download("2", "http://2", "http://2", str(tmp_path / "2"))
+    task3 = await controller_with_queue.add_download("3", "http://3", "http://3", str(tmp_path / "3"))
+
+    await asyncio.sleep(0.05)  # task1 starts
+
+    # Move task2 down (from position 1 to position 2)
+    result = controller_with_queue.move_task_down(task2.id)
+    assert result is True
+
+    # Queue should now be: task3 (pos 1), task2 (pos 2)
+    assert controller_with_queue.get_queue_position(task3.id) == 1
+    assert controller_with_queue.get_queue_position(task2.id) == 2
+
+    # Move task2 down again (from position 2 to position 1 - wait, that's not right)
+    # Actually task2 is now at bottom, so move_down should return False
+    result = controller_with_queue.move_task_down(task2.id)
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_move_task_to_top(controller_with_queue, tmp_path):
+    """Moving a task to top makes it the first queued task."""
+    task1 = await controller_with_queue.add_download("1", "http://1", "http://1", str(tmp_path / "1"))
+    task2 = await controller_with_queue.add_download("2", "http://2", "http://2", str(tmp_path / "2"))
+    task3 = await controller_with_queue.add_download("3", "http://3", "http://3", str(tmp_path / "3"))
+
+    await asyncio.sleep(0.05)  # task1 starts
+
+    # Move task3 to top
+    result = controller_with_queue.move_task_to_top(task3.id)
+    assert result is True
+
+    # Queue should now be: task3 (pos 1), task2 (pos 2)
+    assert controller_with_queue.get_queue_position(task3.id) == 1
+    assert controller_with_queue.get_queue_position(task2.id) == 2
+
+
+@pytest.mark.asyncio
+async def test_move_task_to_top_already_at_top(controller_with_queue, tmp_path):
+    """Moving the first queued task to top returns False."""
+    task1 = await controller_with_queue.add_download("1", "http://1", "http://1", str(tmp_path / "1"))
+    task2 = await controller_with_queue.add_download("2", "http://2", "http://2", str(tmp_path / "2"))
+
+    await asyncio.sleep(0.05)  # task1 starts
+
+    result = controller_with_queue.move_task_to_top(task2.id)
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_move_task_to_bottom(controller_with_queue, tmp_path):
+    """Moving a task to bottom makes it the last queued task."""
+    task1 = await controller_with_queue.add_download("1", "http://1", "http://1", str(tmp_path / "1"))
+    task2 = await controller_with_queue.add_download("2", "http://2", "http://2", str(tmp_path / "2"))
+    task3 = await controller_with_queue.add_download("3", "http://3", "http://3", str(tmp_path / "3"))
+
+    await asyncio.sleep(0.05)  # task1 starts
+
+    # Move task2 to bottom
+    result = controller_with_queue.move_task_to_bottom(task2.id)
+    assert result is True
+
+    # Queue should now be: task3 (pos 1), task2 (pos 2)
+    assert controller_with_queue.get_queue_position(task3.id) == 1
+    assert controller_with_queue.get_queue_position(task2.id) == 2
+
+
+@pytest.mark.asyncio
+async def test_move_task_to_bottom_already_at_bottom(controller_with_queue, tmp_path):
+    """Moving the last queued task to bottom returns False."""
+    task1 = await controller_with_queue.add_download("1", "http://1", "http://1", str(tmp_path / "1"))
+    task2 = await controller_with_queue.add_download("2", "http://2", "http://2", str(tmp_path / "2"))
+
+    await asyncio.sleep(0.05)  # task1 starts
+
+    result = controller_with_queue.move_task_to_bottom(task2.id)
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_remove_task_rebuilds_queue_order(controller_with_queue, tmp_path):
+    """Removing a queued task rebuilds queue_order for remaining tasks."""
+    task1 = await controller_with_queue.add_download("1", "http://1", "http://1", str(tmp_path / "1"))
+    task2 = await controller_with_queue.add_download("2", "http://2", "http://2", str(tmp_path / "2"))
+    task3 = await controller_with_queue.add_download("3", "http://3", "http://3", str(tmp_path / "3"))
+
+    await asyncio.sleep(0.05)  # task1 starts
+
+    # Remove task2 (middle of queue)
+    controller_with_queue.remove_task(task2.id)
+
+    # Queue should now be: task3 (pos 1)
+    assert controller_with_queue.get_queue_position(task3.id) == 1
+    assert task3.queue_order == 0
+
+
+@pytest.mark.asyncio
+async def test_scheduler_respects_queue_order_after_reorder(controller_with_queue, tmp_path):
+    """After reordering, scheduler promotes tasks in new queue order."""
+    task1 = await controller_with_queue.add_download("1", "http://1", "http://1", str(tmp_path / "1"))
+    task2 = await controller_with_queue.add_download("2", "http://2", "http://2", str(tmp_path / "2"))
+    task3 = await controller_with_queue.add_download("3", "http://3", "http://3", str(tmp_path / "3"))
+
+    await asyncio.sleep(0.05)  # task1 starts
+
+    # Move task3 to top of queue
+    controller_with_queue.move_task_to_top(task3.id)
+
+    # Complete task1
+    task1.status = TaskStatus.COMPLETED
+    controller_with_queue._scheduler.on_task_status_changed(task1, TaskStatus.DOWNLOADING)
+
+    # task3 should be promoted (was moved to top), not task2
+    # Check immediately - promotion is synchronous in scheduler
+    assert task3.id in controller_with_queue._scheduler._active_tasks
+    assert task3.id in controller_with_queue._scheduler._scheduled_tasks
+    assert task2.status == TaskStatus.QUEUED
+
+
+@pytest.mark.asyncio
+async def test_retry_download_adds_to_queue_end(controller_with_queue, tmp_path):
+    """Retrying a failed task adds it to the end of the queue."""
+    task1 = await controller_with_queue.add_download("1", "http://1", "http://1", str(tmp_path / "1"))
+    task2 = await controller_with_queue.add_download("2", "http://2", "http://2", str(tmp_path / "2"))
+    task3 = await controller_with_queue.add_download("3", "http://3", "http://3", str(tmp_path / "3"))
+
+    await asyncio.sleep(0.05)  # task1 starts
+
+    # Fail task1
+    task1.status = TaskStatus.FAILED
+    controller_with_queue._scheduler.on_task_status_changed(task1, TaskStatus.DOWNLOADING)
+
+    await asyncio.sleep(0.05)  # task2 starts
+
+    # Retry task1
+    controller_with_queue.retry_download(task1.id)
+
+    # task1 should be at end of queue (after task3)
+    assert controller_with_queue.get_queue_position(task3.id) == 1
+    assert controller_with_queue.get_queue_position(task1.id) == 2
+
+
+@pytest.mark.asyncio
+async def test_clear_completed_does_not_affect_queued_tasks(controller_with_queue, tmp_path):
+    """clear_completed only removes completed tasks, not queued/active."""
+    task1 = await controller_with_queue.add_download("1", "http://1", "http://1", str(tmp_path / "1"))
+    task2 = await controller_with_queue.add_download("2", "http://2", "http://2", str(tmp_path / "2"))
+    task3 = await controller_with_queue.add_download("3", "http://3", "http://3", str(tmp_path / "3"))
+
+    await asyncio.sleep(0.05)  # task1 starts
+
+    # Complete task1 properly through the manager
+    task1.status = TaskStatus.COMPLETED
+    task1.downloaded_size = task1.total_size = 100
+    controller_with_queue._scheduler.on_task_status_changed(task1, TaskStatus.DOWNLOADING)
+
+    await asyncio.sleep(0.05)  # task2 starts
+
+    # Clear completed
+    removed = controller_with_queue.clear_completed()
+
+    assert task1.id in removed
+    assert task2.is_active
+    assert task3.status == TaskStatus.QUEUED
+    assert controller_with_queue.get_queue_position(task3.id) == 1
