@@ -262,7 +262,7 @@ class DownloadManager:
             if status in (403, 401):
                 return DownloadErrorType.ACCESS_DENIED
             if status == 404:
-                return DownloadErrorType.NETWORK
+                return DownloadErrorType.RESOURCE_NOT_FOUND
             return DownloadErrorType.NETWORK
 
         # Network/connection related errors from httpx
@@ -312,7 +312,6 @@ class DownloadManager:
             if resume_position > 0:
                 # V1.13 — Validate partial file before resuming
                 if not self._is_partial_file_valid(part_path, resume_position):
-                    task.error_type = DownloadErrorType.CORRUPT_PARTIAL
                     log.warning("Corrupt partial file detected, removing: %s", part_path)
                     part_path.unlink(missing_ok=True)
                     resume_position = 0
@@ -559,8 +558,9 @@ class DownloadManager:
         """Cancel the asyncio task for a given task ID.
         
         Returns True if a task was found and cancelled, False otherwise.
+        Note: Does not remove from _tasks registry; _run() handles cleanup in its finally block.
         """
-        asyncio_task = self._tasks.pop(task_id, None)
+        asyncio_task = self._tasks.get(task_id)
         if asyncio_task and not asyncio_task.done():
             asyncio_task.cancel()
             return True
@@ -648,6 +648,7 @@ class DownloadManager:
             DownloadErrorType.EXISTING_FILE,
             DownloadErrorType.CORRUPT_PARTIAL,
             DownloadErrorType.VERIFICATION,
+            DownloadErrorType.RESOURCE_NOT_FOUND,
         )
         is_transient = task.error_type in transient_errors
         is_permanent = task.error_type in permanent_errors

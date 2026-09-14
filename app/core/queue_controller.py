@@ -79,6 +79,10 @@ def classify_download_error(task: DownloadTask) -> DownloadErrorType:
     ):
         return DownloadErrorType.SERVER_UNAVAILABLE
 
+    # Resource not found (404)
+    if "404" in msg or "not found" in msg:
+        return DownloadErrorType.RESOURCE_NOT_FOUND
+
     # Timeout
     if "timeout" in msg or "timed out" in msg:
         return DownloadErrorType.TIMEOUT

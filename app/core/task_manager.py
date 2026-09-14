@@ -32,6 +32,7 @@ class DownloadErrorType(enum.Enum):
     SERVER_UNAVAILABLE = "server_unavailable"
     EXISTING_FILE = "existing_file"
     CORRUPT_PARTIAL = "corrupt_partial"
+    RESOURCE_NOT_FOUND = "resource_not_found"
 
 
 @dataclass

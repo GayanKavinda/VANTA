@@ -185,3 +185,17 @@ def test_classify_checksum_mismatch():
     task = _task(error="Checksum mismatch on partial file")
     result = classify_download_error(task)
     assert result is DownloadErrorType.CORRUPT_PARTIAL
+
+
+# ── V1.13.1 — Reliability Hardening: Regression Tests ──────────────────────
+
+def test_classify_resource_not_found_404():
+    task = _task(error="404 Not Found")
+    result = classify_download_error(task)
+    assert result is DownloadErrorType.RESOURCE_NOT_FOUND
+
+
+def test_classify_resource_not_found_not_found():
+    task = _task(error="File not found on server")
+    result = classify_download_error(task)
+    assert result is DownloadErrorType.RESOURCE_NOT_FOUND

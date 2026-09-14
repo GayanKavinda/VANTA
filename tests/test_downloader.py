@@ -1095,3 +1095,190 @@ def test_is_partial_file_valid_empty(download_manager, tmp_path):
     part_path.write_bytes(b"")
     assert download_manager._is_partial_file_valid(part_path, 0) is False
     assert download_manager._is_partial_file_valid(part_path, 100) is False
+
+
+# ── V1.13.1 — Reliability Hardening: Regression Tests ──────────────────────
+
+@pytest.mark.asyncio
+async def test_classify_exception_http_404(download_manager):
+    """HTTP 404 should be classified as RESOURCE_NOT_FOUND (permanent, not transient)."""
+    import httpx
+    dm = download_manager
+    response = httpx.Response(404, request=httpx.Request("GET", "http://test"))
+    exc = httpx.HTTPStatusError("404", request=response.request, response=response)
+    assert dm._classify_exception(exc) == DownloadErrorType.RESOURCE_NOT_FOUND
+
+
+@pytest.mark.asyncio
+async def test_retry_resource_not_found_restarts(download_manager, test_server, tmp_path):
+    """RESOURCE_NOT_FOUND (404) is permanent - should restart from zero."""
+    dest = tmp_path / "downloads" / "retry_404.bin"
+    part_path = dest.with_suffix(dest.suffix + ".part")
+    part_path.parent.mkdir(parents=True, exist_ok=True)
+    partial_data = b"VANTA test download " * 10
+    part_path.write_bytes(partial_data)
+
+    task = await download_manager.add_download(
+        name="retry_404.bin",
+        source_url=test_server["url"],
+        download_url=test_server["url"],
+        destination=str(dest),
+    )
+
+    assert await _wait_for_status(task, TaskStatus.COMPLETED, timeout=30.0)
+    assert task.status == TaskStatus.COMPLETED
+    assert task.supports_resume is True
+
+    # Simulate a 404 failure
+    task.error_type = DownloadErrorType.RESOURCE_NOT_FOUND
+    task.status = TaskStatus.FAILED
+    task.error = "404 Not Found"
+    download_manager.retry_task(task.id)
+
+    # Should restart from zero (permanent error)
+    assert task.status == TaskStatus.QUEUED
+    assert task.downloaded_size == 0
+    assert task.progress == 0.0
+    assert task.supports_resume is False
+    assert not part_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_cancel_task_async_does_not_pop_task(download_manager, test_server, tmp_path):
+    """cancel_task_async should cancel but not pop from _tasks; _run handles cleanup."""
+    dest = tmp_path / "downloads" / "cancel_async_test.bin"
+
+    task = await download_manager.add_download(
+        name="cancel_async_test.bin",
+        source_url=test_server["url"],
+        download_url=test_server["url"],
+        destination=str(dest),
+    )
+
+    # Wait for download to start
+    while task.status == TaskStatus.QUEUED:
+        await asyncio.sleep(0.01)
+
+    # Task should be in _tasks
+    assert task.id in download_manager._tasks
+
+    # Call cancel_task_async
+    result = download_manager.cancel_task_async(task.id)
+    assert result is True
+
+    # Task should still be in _tasks (not popped)
+    assert task.id in download_manager._tasks
+
+    # Wait for task to complete cancellation
+    await asyncio.sleep(0.1)
+
+    # After _run completes, task should be cleaned up by _run's finally block
+    # (may take a moment for the cancelled task to process)
+    await asyncio.sleep(0.2)
+    # The task may or may not be cleaned up yet depending on timing,
+    # but the key point is cancel_task_async didn't pop it immediately
+
+
+@pytest.mark.asyncio
+async def test_corrupt_partial_does_not_leave_error_type_set(download_manager, test_server, tmp_path):
+    """Corrupt partial detection should not leave CORRUPT_PARTIAL error_type on successful completion."""
+    dest = tmp_path / "downloads" / "corrupt_error_type_test.bin"
+    part_path = dest.with_suffix(dest.suffix + ".part")
+    part_path.parent.mkdir(parents=True, exist_ok=True)
+    # Write empty partial data - should be detected as invalid
+    part_path.write_bytes(b"")
+
+    task = await download_manager.add_download(
+        name="corrupt_error_type_test.bin",
+        source_url=test_server["url"],
+        download_url=test_server["url"],
+        destination=str(dest),
+    )
+
+    assert await _wait_for_status(task, TaskStatus.COMPLETED, timeout=30.0)
+    assert task.status == TaskStatus.COMPLETED
+    # error_type should be UNKNOWN (or whatever the final state is), not CORRUPT_PARTIAL
+    assert task.error_type != DownloadErrorType.CORRUPT_PARTIAL
+    assert dest.exists()
+    assert dest.stat().st_size == test_server["file_size"]
+
+
+@pytest.mark.asyncio
+async def test_supports_resume_only_after_206(download_manager, test_server, tmp_path):
+    """supports_resume should only be True after server responds with 206 (on resume)."""
+    dest = tmp_path / "downloads" / "supports_resume_test.bin"
+
+    task = await download_manager.add_download(
+        name="supports_resume_test.bin",
+        source_url=test_server["url"],
+        download_url=test_server["url"],
+        destination=str(dest),
+    )
+
+    # Initially supports_resume should be False
+    assert task.supports_resume is False
+
+    # Wait for download to start and complete (fresh download gets 200, not 206)
+    assert await _wait_for_status(task, TaskStatus.COMPLETED, timeout=30.0)
+    assert task.status == TaskStatus.COMPLETED
+
+    # Fresh download gets 200, so supports_resume remains False
+    # It's only set to True when resuming with Range header and getting 206
+    assert task.supports_resume is False
+
+
+@pytest.mark.asyncio
+async def test_supports_resume_false_when_no_range(download_manager, no_range_server, tmp_path):
+    """supports_resume should be False when server doesn't support Range (returns 200 for Range request)."""
+    dest = tmp_path / "downloads" / "no_range_resume_test.bin"
+    part_path = dest.with_suffix(dest.suffix + ".part")
+    part_path.parent.mkdir(parents=True, exist_ok=True)
+    partial_data = b"VANTA test download " * 10
+    part_path.write_bytes(partial_data)
+
+    task = await download_manager.add_download(
+        name="no_range_resume_test.bin",
+        source_url=no_range_server["url"],
+        download_url=no_range_server["url"],
+        destination=str(dest),
+    )
+
+    assert await _wait_for_status(task, TaskStatus.COMPLETED, timeout=30.0)
+    assert task.status == TaskStatus.COMPLETED
+    # Server doesn't support Range, so supports_resume should be False
+    assert task.supports_resume is False
+
+
+@pytest.mark.asyncio
+async def test_retry_without_supports_resume_restarts(download_manager, no_range_server, tmp_path):
+    """Retry should restart from zero if supports_resume is False, even for transient errors."""
+    dest = tmp_path / "downloads" / "retry_no_supports_resume.bin"
+    part_path = dest.with_suffix(dest.suffix + ".part")
+    part_path.parent.mkdir(parents=True, exist_ok=True)
+    partial_data = b"VANTA test download " * 10
+    part_path.write_bytes(partial_data)
+
+    task = await download_manager.add_download(
+        name="retry_no_supports_resume.bin",
+        source_url=no_range_server["url"],
+        download_url=no_range_server["url"],
+        destination=str(dest),
+    )
+
+    assert await _wait_for_status(task, TaskStatus.COMPLETED, timeout=30.0)
+    assert task.status == TaskStatus.COMPLETED
+    # Server doesn't support Range
+    assert task.supports_resume is False
+
+    # Simulate a transient failure
+    task.error_type = DownloadErrorType.TIMEOUT
+    task.status = TaskStatus.FAILED
+    task.error = "Read timeout"
+    download_manager.retry_task(task.id)
+
+    # Should restart from zero (no supports_resume)
+    assert task.status == TaskStatus.QUEUED
+    assert task.downloaded_size == 0
+    assert task.progress == 0.0
+    assert task.supports_resume is False
+    assert not part_path.exists()
