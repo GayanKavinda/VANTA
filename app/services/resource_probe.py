@@ -4,6 +4,7 @@ from dataclasses import replace
 import httpx
 
 from app.core.models import ResourceProbeResult
+from app.services.resource_intelligence import ResourceIntelligence
 from app.services.url_security import (
     UrlSecurityDecision,
     is_safe_redirect,
@@ -65,6 +66,10 @@ class ResourceProbe:
         self._max_redirects = max(0, max_redirects)
         self._allow_private = allow_private_networks
         self._blocked_hosts = tuple(blocked_hosts)
+        self._intelligence = ResourceIntelligence(
+            allow_private_networks=allow_private_networks,
+            blocked_hosts=blocked_hosts,
+        )
 
     @property
     def max_redirects(self) -> int:
@@ -177,7 +182,7 @@ class ResourceProbe:
             status_code=response.status_code,
         )
 
-        return ResourceProbeResult(
+        result = ResourceProbeResult(
             url=original_url,
             final_url=final_url,
             status_code=response.status_code,
@@ -186,7 +191,14 @@ class ResourceProbe:
             filename=filename,
             supports_range=supports_range,
             is_downloadable=is_downloadable,
+            content_disposition=content_disposition or None,
+            content_length=response.headers.get("content-length"),
+            content_range=response.headers.get("content-range"),
         )
+
+        self._intelligence.enrich(result)
+
+        return result
 
 
 def _is_redirect(status_code: int) -> bool:

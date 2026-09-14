@@ -28,6 +28,11 @@ class ResourceProbeResult:
     supports_range: Optional[bool] = None
     is_downloadable: bool = False
 
+    # V1.14 — Additional headers for intelligence
+    content_disposition: Optional[str] = None
+    content_length: Optional[str] = None
+    content_range: Optional[str] = None
+
 
 @dataclass
 class ResolvedResource:
