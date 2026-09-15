@@ -3,6 +3,7 @@ from urllib.parse import urljoin
 import httpx
 
 from app.core.models import AnalysisResult, DownloadFile, ResolvedResource
+from app.sources.capability import SourceCapability, SourceType
 from app.sources.base import BaseSourceAdapter
 from app.services.resolver import Resolver
 from app.services.url_security import validate_url
@@ -17,7 +18,7 @@ from app.sources.link_classifier import (
 )
 from app.utils.logger import get_logger
 
-log = get_logger("vanta.sources.generic")
+log = get_logger("vanta.generic")
 
 _USER_AGENT = "VANTA/1.6 (+generic-page-resolver)"
 _TIMEOUT = httpx.Timeout(30.0)
@@ -59,6 +60,23 @@ class GenericSourceAdapter(BaseSourceAdapter):
     @property
     def name(self) -> str:
         return "Generic Page"
+
+    @property
+    def source_type(self) -> SourceType:
+        return SourceType.WEBPAGE
+
+    @property
+    def capabilities(self):
+        from app.sources.capability import SourceCapabilities
+
+        return SourceCapabilities(
+            source_type=SourceType.WEBPAGE,
+            capabilities=frozenset({
+                SourceCapability.WEBPAGE_DISCOVERY,
+                SourceCapability.HTML_LINK_DISCOVERY,
+                SourceCapability.RESOURCE_PROBING,
+            }),
+        )
 
     def can_handle(self, url: str) -> bool:
         lowered = (url or "").lower().strip()

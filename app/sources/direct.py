@@ -1,6 +1,7 @@
 import httpx
 
 from app.core.models import AnalysisResult, DownloadFile
+from app.sources.capability import SourceCapability, SourceType
 from app.sources.base import BaseSourceAdapter
 from app.sources.http_headers import (
     extract_filename_from_content_disposition,
@@ -19,6 +20,23 @@ class DirectDownloadAdapter(BaseSourceAdapter):
     @property
     def name(self) -> str:
         return "Direct Download"
+
+    @property
+    def source_type(self) -> SourceType:
+        return SourceType.DIRECT
+
+    @property
+    def capabilities(self):
+        from app.sources.capability import SourceCapabilities
+
+        return SourceCapabilities(
+            source_type=SourceType.DIRECT,
+            capabilities=frozenset({
+                SourceCapability.DIRECT_RESOURCE,
+                SourceCapability.RESOURCE_PROBING,
+                SourceCapability.DOWNLOAD,
+            }),
+        )
 
     def can_handle(self, url: str) -> bool:
         if not url:

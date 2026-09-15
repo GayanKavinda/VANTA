@@ -4,6 +4,7 @@ from urllib.parse import urlparse
 import httpx
 
 from app.core.models import AnalysisResult
+from app.sources.capability import SourceCapability, SourceType
 from app.sources.base import BaseSourceAdapter
 from app.utils.logger import get_logger
 
@@ -28,6 +29,19 @@ class ProtectedSourceAdapter(BaseSourceAdapter):
     @property
     def name(self) -> str:
         return "Protected Source"
+
+    @property
+    def source_type(self) -> SourceType:
+        return SourceType.PROTECTED
+
+    @property
+    def capabilities(self):
+        from app.sources.capability import SourceCapabilities
+
+        return SourceCapabilities(
+            source_type=SourceType.PROTECTED,
+            capabilities=frozenset({SourceCapability.UNSUPPORTED}),
+        )
 
     def can_handle(self, url: str) -> bool:
         domain = urlparse(url).netloc or ""
