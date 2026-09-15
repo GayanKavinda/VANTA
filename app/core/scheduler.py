@@ -117,7 +117,7 @@ class DownloadScheduler:
             self._on_status_change(task, task.status)  # Notify of admission, don't set status
 
         # Fire and forget - manager handles the actual execution
-        asyncio.create_task(self._run_task(task))
+        asyncio.get_event_loop().create_task(self._run_task(task))
 
     async def _run_task(self, task: DownloadTask):
         """Run the download task and handle completion."""

@@ -27,6 +27,9 @@ _PROBE_CONCURRENCY = 4
 
 
 def _is_non_resource_path(href: str) -> bool:
+    from app.sources.http_headers import has_download_extension
+    if has_download_extension(href or ""):
+        return False
     if not href:
         return True
     from urllib.parse import urlparse
@@ -36,7 +39,10 @@ def _is_non_resource_path(href: str) -> bool:
         "/privacy", "/terms", "/help", "/faq", "/search",
         "/category", "/tag", "/author", "/archive",
     )
-    return any(path.startswith(seg) or f"{seg}/" in path for seg in segments)
+    for seg in segments:
+        if path == seg or path.startswith(seg + "/"):
+            return True
+    return False
 
 
 class GenericSourceAdapter(BaseSourceAdapter):
@@ -216,6 +222,8 @@ class GenericSourceAdapter(BaseSourceAdapter):
         ambiguous: list[dict] = []
         text_by_url: dict[str, str] = {}
 
+        download_hint_by_url: dict[str, str] = {}
+        candidate_evidence: dict[str, dict[str, str]] = {}
         for candidate in candidates:
             href = (candidate.url or "").strip()
             if not href:
@@ -229,6 +237,27 @@ class GenericSourceAdapter(BaseSourceAdapter):
 
             absolute = urljoin(page_url, href)
             normalized = normalize_url(absolute)
+
+            if candidate.download_name_hint:
+                download_hint_by_url.setdefault(normalized, candidate.download_name_hint)
+
+            evidence = {}
+            if candidate.element_type:
+                evidence["element_type"] = candidate.element_type
+            if candidate.type_hint:
+                evidence["type_hint"] = candidate.type_hint
+            if candidate.download_name_hint:
+                evidence["download_hint"] = candidate.download_name_hint
+            if candidate.discovery_attribute:
+                evidence["discovery_attribute"] = candidate.discovery_attribute
+            if evidence:
+                # Merge evidence for duplicate URLs rather than overwriting,
+                # so provenance from multiple discovery paths is preserved.
+                existing = candidate_evidence.get(normalized, {})
+                for key, value in evidence.items():
+                    if key not in existing:
+                        existing[key] = value
+                candidate_evidence[normalized] = existing
 
             if is_download_candidate(href):
                 obvious.append({"url": normalized, "anchor_text": candidate.anchor_text or ""})
@@ -255,9 +284,31 @@ class GenericSourceAdapter(BaseSourceAdapter):
             filename = (
                 r.filename
                 or url_filename
+                or download_hint_by_url.get(r.source_url)
                 or text_by_url.get(r.source_url)
                 or "download"
             )
+
+            evidence = candidate_evidence.get(r.source_url, {})
+            element_type = evidence.get("element_type", "")
+            type_hint = evidence.get("type_hint", "")
+            discovery_attribute = evidence.get("discovery_attribute", "")
+
+            if element_type in ("img", "video", "audio", "source", "object", "embed", "picture"):
+                r.reasons.append(f"discovered through {element_type} element")
+            if element_type == "link":
+                r.reasons.append("discovered through HTML link")
+            if element_type == "meta":
+                r.reasons.append("discovered through metadata")
+            if discovery_attribute == "srcset":
+                r.reasons.append("discovered through srcset")
+            elif discovery_attribute == "preload":
+                r.reasons.append("discovered through preload link")
+            elif discovery_attribute:
+                r.reasons.append(f"discovered through {discovery_attribute} attribute")
+            if type_hint:
+                r.reasons.append(f"HTML type hint: {type_hint}")
+
             files.append(
                 DownloadFile(
                     name=filename,

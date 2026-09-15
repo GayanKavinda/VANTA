@@ -34,7 +34,6 @@ def main():
     app.setApplicationVersion(APP_VERSION)
     app.setApplicationDisplayName(APP_NAME)
     app.setOrganizationName(APP_VENDOR)
-    app.setApplicationDescription(APP_DESCRIPTION)
 
     loop = QEventLoop(app)
     asyncio.set_event_loop(loop)
