@@ -7,6 +7,7 @@ from app.core.models import AnalysisResult, DownloadFile
 from app.core.queue_controller import QueueController
 from app.core.task_manager import DownloadTask, TaskStatus
 from app.services.analyzer import AnalyzerService
+from app.services.filename_service import is_safe_within_directory
 from app.utils.logger import get_logger
 
 log = get_logger("vanta.services.download_service")
@@ -69,7 +70,8 @@ class DownloadService:
         source_url: str,
         file: DownloadFile,
         destination: str | Path | None = None,
-    ) -> DownloadTask:
+        filename: str | None = None,
+    ) -> DownloadTask | None:
         from app.core.models import ResolvedResource
         if isinstance(file, ResolvedResource):
             resolved: ResolvedResource = file
@@ -81,29 +83,46 @@ class DownloadService:
             )
             file = resolved_file
 
+        name_to_use = filename if filename else file.name
+        safe_name = self._file_manager.safe_join(name_to_use)
         dest_dir = Path(destination) if destination else self._file_manager.default_dir
-        filename = self._file_manager.safe_join(file.name)
-        dest_path = self._file_manager.get_unique_path(filename, dest_dir)
+
+        # Defense-in-depth validation (requirement #6).
+        if not safe_name:
+            log.warning("Download rejected: empty filename after sanitization")
+            return None
+        if not is_safe_within_directory(safe_name, dest_dir):
+            log.warning("Download rejected: filename escapes destination: %s", safe_name)
+            return None
+        if filename and destination:
+            dest_dir.mkdir(parents=True, exist_ok=True)
+        # Review dialog flow: explicit filename + destination.
+        # Use exact reviewed values; reject if target already exists.
+        if filename and destination:
+            dest_path = dest_dir / safe_name
+            if dest_path.exists() and dest_path.is_file() and dest_path.stat().st_size > 0:
+                log.warning("Download rejected: file already exists: %s", dest_path)
+                return None
+        else:
+            # Non-review flow: auto-resolve unique path (backward compatible).
+            dest_path = self._file_manager.get_unique_path(safe_name, dest_dir)
 
         if self._queue_controller is not None:
             task = await self._queue_controller.add_download(
-                name=file.name,
+                name=name_to_use,
                 source_url=source_url,
                 download_url=file.url,
                 destination=str(dest_path),
             )
         else:
             task = await self._download_manager.add_download(
-                name=file.name,
+                name=name_to_use,
                 source_url=source_url,
                 download_url=file.url,
                 destination=str(dest_path),
             )
 
-        log.info(
-            "Started download task '%s' (%s) -> %s",
-            task.id, file.name, dest_path,
-        )
+        log.info("Started download task '%s' (%s) -> %s", task.id, name_to_use, dest_path)
         return task
 
     def get_all_tasks(self) -> list[DownloadTask]:

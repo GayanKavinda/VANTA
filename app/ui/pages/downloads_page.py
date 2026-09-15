@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 from app.core.queue_controller import QueueController
 from app.core.task_manager import DownloadTask, TaskStatus
 from app.services.download_service import DownloadService
+from app.ui.download_details import DownloadDetailsDialog
 from app.ui.widgets.download_card import DownloadCard
 from app.utils.logger import get_logger
 
@@ -128,6 +129,7 @@ class DownloadsPage(QWidget):
             card.move_down_requested.connect(self._on_move_down_clicked)
             card.move_top_requested.connect(self._on_move_top_clicked)
             card.move_bottom_requested.connect(self._on_move_bottom_clicked)
+            card.details_requested.connect(self._on_details_clicked)
             self._cards[task.id] = card
             self._placeholder.setVisible(False)
             self._content_layout.insertWidget(
@@ -298,3 +300,14 @@ class DownloadsPage(QWidget):
         if not self._cards:
             self._placeholder.setVisible(True)
         self._update_summary()
+
+    def _on_details_clicked(self, task_id: str):
+        """Open the download-details dialog for a task."""
+        controller = self._queue_controller
+        if controller is None:
+            return
+        task = controller.find_task(task_id)
+        if task is None:
+            return
+        dialog = DownloadDetailsDialog(task, parent=self)
+        dialog.exec()

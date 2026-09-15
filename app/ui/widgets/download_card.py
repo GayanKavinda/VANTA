@@ -23,6 +23,7 @@ class DownloadCard(QFrame):
     move_down_requested = Signal(str)
     move_top_requested = Signal(str)
     move_bottom_requested = Signal(str)
+    details_requested = Signal(str)
 
     STATUS_LABELS = {
         TaskStatus.QUEUED: "Queued",
@@ -150,6 +151,10 @@ class DownloadCard(QFrame):
         self._remove_btn.setFixedSize(90, 32)
         self._remove_btn.clicked.connect(lambda: self.remove_requested.emit(self._task.id))
 
+        self._details_btn = QPushButton("Details")
+        self._details_btn.setFixedSize(90, 32)
+        self._details_btn.clicked.connect(lambda: self.details_requested.emit(self._task.id))
+
         layout.addLayout(self._button_row)
 
     def update_from_task(self, task: DownloadTask):
@@ -193,6 +198,9 @@ class DownloadCard(QFrame):
             self._remove_btn,
         ):
             self._button_row.removeWidget(button)
+
+        # Details is always available regardless of state.
+        self._button_row.addWidget(self._details_btn)
 
         if task.status == TaskStatus.QUEUED:
             self._button_row.addWidget(self._cancel_btn)

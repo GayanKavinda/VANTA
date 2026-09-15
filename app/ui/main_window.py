@@ -16,8 +16,10 @@ from app.core.queue_controller import QueueController
 from app.core.task_manager import DownloadTask, TaskStatus
 from app.database.repositories import load_download_tasks
 from app.services.download_service import DownloadService
+from app.services.download_workflow import DownloadWorkflowService
 from app.services.persistence_service import PersistenceService
 from app.services.settings_service import SettingsService
+from app.ui.download_review import DownloadReviewDialog
 from app.ui.pages.home_page import HomePage
 from app.ui.pages.downloads_page import DownloadsPage
 from app.ui.pages.history_page import HistoryPage
@@ -47,6 +49,9 @@ class MainWindow(QMainWindow):
             file_manager=self._app_state.file_manager,
         )
         self._persistence = PersistenceService()
+
+        # V2.0 Phase 2 - workflow service for duplicate detection/validation.
+        self._workflow = DownloadWorkflowService(self._app_state.file_manager)
 
         self._build_ui()
         self._connect_signals()
@@ -191,7 +196,31 @@ class MainWindow(QMainWindow):
             )
 
     def _on_download_requested(self, source_url: str, resource_view):
-        asyncio.create_task(self._start_resource_download(source_url, resource_view))
+        # V2.0 Phase 2 - compute duplicate state before opening review.
+        from app.services.filename_service import sanitize_filename
+
+        proposed_filename = sanitize_filename(resource_view.file.name)
+        proposed_destination = self._settings.download_dir()
+        duplicate_check = self._workflow.check_duplicate(
+            resource_view.file, proposed_filename, proposed_destination
+        )
+
+        # V2.0 Phase 2 - show review dialog before starting.
+        dialog = DownloadReviewDialog(
+            file=resource_view.file,
+            file_manager=self._app_state.file_manager,
+            download_dir=proposed_destination,
+            duplicate_check=duplicate_check,
+            workflow=self._workflow,
+            parent=self,
+        )
+        if dialog.exec() != 1:
+            log.info("Download cancelled by user during review")
+            return
+
+        asyncio.create_task(
+            self._start_resource_download(source_url, resource_view, dialog)
+        )
 
     def _on_downloads_selected(self, source_url: str, resource_views: list):
         if not resource_views:
@@ -200,13 +229,24 @@ class MainWindow(QMainWindow):
             self._start_bulk_downloads(source_url, resource_views)
         )
 
-    async def _start_resource_download(self, source_url: str, resource_view):
+    async def _start_resource_download(self, source_url: str, resource_view, dialog: DownloadReviewDialog | None = None):
         try:
-            task = await self._download_service.start_file_download(
-                source_url=source_url,
-                file=resource_view.file,
-            )
+            # V2.0 Phase 2 - use reviewed filename/destination when available.
+            if dialog is not None:
+                task = await self._download_service.start_file_download(
+                    source_url=source_url,
+                    file=resource_view.file,
+                    destination=dialog.destination,
+                    filename=dialog.filename,
+                )
+            else:
+                task = await self._download_service.start_file_download(
+                    source_url=source_url,
+                    file=resource_view.file,
+                )
             if task:
+                # Register the task so future duplicate checks see it.
+                self._workflow.register_selected(task)
                 self.stacked_widget.setCurrentIndex(1)
                 self.sidebar.set_active(1)
                 log.info("Download started: %s -> %s", task.id, task.name)
@@ -227,6 +267,8 @@ class MainWindow(QMainWindow):
                     file=rv.file,
                 )
                 if task:
+                    # Register each task so future duplicate checks see it.
+                    self._workflow.register_selected(task)
                     started += 1
             except Exception as e:
                 log.error(

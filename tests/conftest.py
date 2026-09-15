@@ -16,3 +16,9 @@ def qapp():
     if app is None:
         app = QApplication([])
     yield app
+
+
+@pytest.fixture(autouse=True)
+def _ensure_qapp(qapp):
+    """Ensure a QApplication exists before any Qt widget test runs."""
+    yield
