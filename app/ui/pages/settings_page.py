@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 
 from app.core.downloader import DownloadManager
 from app.core.file_manager import FileManager
+from app.metadata import about_text, app_version_string
 from app.services.settings_service import SettingsService
 from app.utils.logger import get_logger
 
@@ -161,6 +162,24 @@ class SettingsPage(QWidget):
         self._updates_check.setChecked(self._settings.get_bool("check_for_updates"))
         self._updates_check.toggled.connect(self._on_updates_toggled)
         layout.addWidget(self._updates_check)
+
+        # V2.0 — About / version visibility
+        about_frame = QFrame()
+        about_frame.setStyleSheet("background: transparent;")
+        about_layout = QVBoxLayout(about_frame)
+        about_layout.setContentsMargins(0, 0, 0, 0)
+        about_layout.setSpacing(4)
+
+        version_label = QLabel(app_version_string())
+        version_label.setStyleSheet("font-size: 13px; font-weight: 600; color: #E8E8F0;")
+        about_layout.addWidget(version_label)
+
+        about_body = QLabel(about_text())
+        about_body.setStyleSheet("font-size: 12px; color: #8A8A9A;")
+        about_body.setWordWrap(True)
+        about_layout.addWidget(about_body)
+
+        layout.addWidget(about_frame)
 
         group.layout().addLayout(layout)
         return group
