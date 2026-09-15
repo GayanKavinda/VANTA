@@ -6,6 +6,8 @@ from typing import Callable, Optional
 import httpx
 
 from app.core.task_manager import DownloadTask, DownloadErrorType, TaskStatus
+from app.services.crash_recovery import CrashRecovery, StartupRestorer
+from app.services.diagnostics import DiagnosticContext, FailurePhase, build_diagnostic_context, log_diagnostic
 from app.services.download_security import RedirectWalkError, walk_redirects
 from app.utils.constants import CHUNK_SIZE
 from app.utils.logger import get_logger
@@ -32,6 +34,7 @@ class DownloadManager:
         *,
         allow_private_networks: bool = False,
         blocked_hosts=(),
+        downloads_dir: Optional[Path] = None,
     ):
         self._max_concurrent = max_concurrent
         self._semaphore = asyncio.Semaphore(max_concurrent)
@@ -41,6 +44,11 @@ class DownloadManager:
         self._speed_limit_bytes_per_sec: int = 0
         self._allow_private = allow_private_networks
         self._blocked_hosts = tuple(blocked_hosts)
+        self._downloads_dir = downloads_dir or Path.home() / "Downloads"
+
+        # V1.15 — Crash recovery
+        self._crash_recovery = CrashRecovery(self._downloads_dir)
+        self._startup_restorer = StartupRestorer(self._crash_recovery)
 
     @property
     def download_tasks(self) -> list[DownloadTask]:
@@ -217,6 +225,7 @@ class DownloadManager:
     async def _run(self, task: DownloadTask):
         async with self._semaphore:
             was_paused = False
+            start_time = time.monotonic()
             try:
                 await self._execute_download(task)
             except asyncio.CancelledError:
@@ -234,6 +243,18 @@ class DownloadManager:
                 # Classify the exception if not already classified
                 if task.error_type == DownloadErrorType.UNKNOWN:
                     task.error_type = self._classify_exception(e)
+                
+                # V1.15 — Build and log diagnostic context
+                diagnostic = build_diagnostic_context(
+                    task=task,
+                    phase=FailurePhase.UNKNOWN,  # Will be refined in _execute_download
+                    error_type=task.error_type,
+                    error_message=str(e),
+                    exception_type=type(e).__name__,
+                    duration_seconds=time.monotonic() - start_time,
+                )
+                log_diagnostic(diagnostic)
+                
                 self._set_status(task, TaskStatus.FAILED, str(e))
             finally:
                 self._tasks.pop(task.id, None)
@@ -345,6 +366,18 @@ class DownloadManager:
                     task.error_type = DownloadErrorType.UNSAFE_REDIRECT
                 else:
                     task.error_type = DownloadErrorType.NETWORK
+                # V1.15 — Diagnostic for redirect failure
+                diagnostic = build_diagnostic_context(
+                    task=task,
+                    phase=FailurePhase.REDIRECT_WALK,
+                    error_type=task.error_type,
+                    error_message=f"{e.message} ({e.kind})",
+                    exception_type=type(e).__name__,
+                    redirect_chain=[r.url for r in walk.history] if hasattr(walk, 'history') else [],
+                    final_url=walk.final_url if hasattr(walk, 'final_url') else None,
+                    duration_seconds=time.monotonic() - start_time,
+                )
+                log_diagnostic(diagnostic)
                 raise ValueError(f"{e.message} ({e.kind})") from e
 
             response = walk.response
@@ -380,6 +413,19 @@ class DownloadManager:
                     task.supports_resume = False
 
                 if response.status_code not in (200, 206):
+                    # V1.15 — Diagnostic for HTTP error status
+                    diagnostic = build_diagnostic_context(
+                        task=task,
+                        phase=FailurePhase.RESPONSE_VALIDATION,
+                        error_type=DownloadErrorType.NETWORK,
+                        error_message=f"HTTP {response.status_code}",
+                        http_status=response.status_code,
+                        http_response_headers=dict(response.headers),
+                        final_url=walk.final_url,
+                        redirect_chain=[str(r.url) for r in walk.history] if hasattr(walk, 'history') else [],
+                        duration_seconds=time.monotonic() - start_time,
+                    )
+                    log_diagnostic(diagnostic)
                     response.raise_for_status()
 
                 self._validate_response(response, task)
@@ -407,6 +453,15 @@ class DownloadManager:
             self._set_status(task, TaskStatus.COMPLETED)
         else:
             task.error_type = DownloadErrorType.VERIFICATION
+            # V1.15 — Diagnostic for verification failure
+            diagnostic = build_diagnostic_context(
+                task=task,
+                phase=FailurePhase.VERIFICATION,
+                error_type=DownloadErrorType.VERIFICATION,
+                error_message="File verification failed: size mismatch",
+                duration_seconds=time.monotonic() - start_time,
+            )
+            log_diagnostic(diagnostic)
             self._set_status(task, TaskStatus.FAILED, "File verification failed")
             part_path.unlink(missing_ok=True)
 
@@ -415,6 +470,17 @@ class DownloadManager:
 
         if "text/html" in content_type:
             task.error_type = DownloadErrorType.HTML_RESPONSE
+            # V1.15 — Diagnostic for HTML response
+            diagnostic = build_diagnostic_context(
+                task=task,
+                phase=FailurePhase.RESPONSE_VALIDATION,
+                error_type=DownloadErrorType.HTML_RESPONSE,
+                error_message=f"Server returned an HTML page instead of '{task.name}' (Content-Type: {content_type}). This usually means access was denied or blocked.",
+                http_status=response.status_code,
+                http_response_headers=dict(response.headers),
+                duration_seconds=0,  # Will be updated by caller
+            )
+            log_diagnostic(diagnostic)
             raise ValueError(
                 f"Server returned an HTML page instead of '{task.name}' "
                 f"(Content-Type: {content_type}). "
@@ -423,6 +489,17 @@ class DownloadManager:
 
         if "text/plain" in content_type and response.headers.get("content-disposition") is None:
             task.error_type = DownloadErrorType.ACCESS_DENIED
+            # V1.15 — Diagnostic for text response
+            diagnostic = build_diagnostic_context(
+                task=task,
+                phase=FailurePhase.RESPONSE_VALIDATION,
+                error_type=DownloadErrorType.ACCESS_DENIED,
+                error_message=f"Server returned a text response instead of '{task.name}' (Content-Type: {content_type}).",
+                http_status=response.status_code,
+                http_response_headers=dict(response.headers),
+                duration_seconds=0,
+            )
+            log_diagnostic(diagnostic)
             raise ValueError(
                 f"Server returned a text response instead of '{task.name}' "
                 f"(Content-Type: {content_type})."
@@ -491,8 +568,18 @@ class DownloadManager:
                             last_flush = now
                 finally:
                     f.flush()
-        except OSError:
+        except OSError as e:
             task.error_type = DownloadErrorType.DISK
+            # V1.15 — Diagnostic for disk write failure
+            diagnostic = build_diagnostic_context(
+                task=task,
+                phase=FailurePhase.FILE_WRITE,
+                error_type=DownloadErrorType.DISK,
+                error_message=f"File write error: {e}",
+                exception_type=type(e).__name__,
+                duration_seconds=time.monotonic() - start_time,
+            )
+            log_diagnostic(diagnostic)
             raise
 
         self._emit_progress(task)
@@ -687,31 +774,23 @@ class DownloadManager:
             asyncio_task = asyncio.create_task(self._run(task))
             self._tasks[task.id] = asyncio_task
 
-    def restore_tasks(self, tasks: list[DownloadTask]):
+    def restore_tasks(self, tasks: list[DownloadTask]) -> list[DownloadTask]:
+        """Restore tasks from persistence with crash recovery.
+
+        This method:
+        1. Validates all tasks against filesystem state
+        2. Cleans up stale .part files
+        3. Recovers interrupted downloads
+        4. Returns list of tasks that need manual resume (interrupted ones)
+        """
         if self._download_tasks:
             return []
 
-        ordered_tasks = sorted(
-            tasks,
-            key=lambda t: (
-                0 if t.status == TaskStatus.QUEUED else 1,
-                t.queue_order if t.queue_order > 0 else 999999,
-                t.created_at,
-            )
-        )
+        # Use crash recovery to validate and restore
+        recovered_tasks, report = self._startup_restorer.restore(tasks)
 
-        interrupted_tasks = []
-        for task in ordered_tasks:
-            if task.status in (
-                TaskStatus.DOWNLOADING,
-                TaskStatus.PREPARING,
-                TaskStatus.VERIFYING,
-            ):
-                task.status = TaskStatus.PAUSED
-                task.error = "Download was interrupted"
-                task.error_type = DownloadErrorType.NETWORK
-                interrupted_tasks.append(task)
-
+        # Add recovered tasks to manager
+        for task in recovered_tasks:
             self._download_tasks.append(task)
 
         self._update_queue_positions()
@@ -719,4 +798,35 @@ class DownloadManager:
         for task in self._download_tasks:
             self._emit_progress(task)
 
+        # Return interrupted tasks that need manual resume
+        interrupted_tasks = [
+            t for t in recovered_tasks
+            if t.status == TaskStatus.PAUSED
+            and t.error_type == DownloadErrorType.NETWORK
+            and "interrupted" in (t.error or "").lower()
+        ]
+
         return interrupted_tasks
+
+    async def shutdown(self):
+        """Graceful shutdown: cancel all active downloads and persist state."""
+        log.info("Shutting down DownloadManager...")
+
+        # Cancel all active downloads
+        for task in list(self._download_tasks):
+            if task.status in (
+                TaskStatus.DOWNLOADING,
+                TaskStatus.PREPARING,
+                TaskStatus.VERIFYING,
+            ):
+                self._set_status(task, TaskStatus.PAUSED, "Application shutting down")
+                asyncio_task = self._tasks.get(task.id)
+                if asyncio_task and not asyncio_task.done():
+                    asyncio_task.cancel()
+
+        # Wait for all tasks to complete cancellation
+        if self._tasks:
+            await asyncio.gather(*self._tasks.values(), return_exceptions=True)
+
+        self._tasks.clear()
+        log.info("DownloadManager shutdown complete")

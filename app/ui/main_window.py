@@ -6,6 +6,7 @@ from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QMainWindow,
+    QMessageBox,
     QStackedWidget,
     QWidget,
 )
@@ -114,6 +115,9 @@ class MainWindow(QMainWindow):
         self._persistence.subscribe_to(self._app_state.download_manager)
 
     def _restore_tasks(self):
+        # Fix database consistency issues first
+        self._persistence.fix_database()
+
         tasks = load_download_tasks()
 
         interrupted_tasks = self._queue_controller.restore_tasks(tasks)
@@ -130,8 +134,6 @@ class MainWindow(QMainWindow):
             log.info("%d paused downloads available for manual resume", len(paused_tasks))
 
     def _prompt_recovery(self, tasks: list[DownloadTask]):
-        from PySide6.QtWidgets import QMessageBox
-
         msg = (
             f"VANTA was closed during {len(tasks)} download(s).\n\n"
             "Resume these downloads?"
@@ -244,5 +246,17 @@ class MainWindow(QMainWindow):
             )
 
     def closeEvent(self, event):
+        # Graceful shutdown
+        log.info("Application closing, initiating graceful shutdown...")
+
+        # Step 1: Stop new work and pause/cancel active downloads
+        asyncio.run(self._app_state.download_manager.shutdown())
+
+        # Step 2: Flush every DownloadTask to persistence
+        # (shutdown has already set active tasks to PAUSED, a terminal state)
         self._persistence.flush()
+
+        # Step 3: Validate the database
+        self._persistence.validate_database()
+
         event.accept()

@@ -599,10 +599,10 @@ def test_restore_tasks_converts_interrupted_to_paused(queue_manager):
     queue_manager.restore_tasks([downloading, preparing, verifying, paused])
 
     assert downloading.status == TaskStatus.PAUSED
-    assert downloading.error == "Download was interrupted"
+    assert downloading.error == "Download was interrupted (application crash recovery)"
     assert downloading.error_type == DownloadErrorType.NETWORK
     assert preparing.status == TaskStatus.PAUSED
-    assert preparing.error == "Download was interrupted"
+    assert preparing.error == "Download was interrupted (application crash recovery)"
     assert verifying.status == TaskStatus.PAUSED
     assert paused.status == TaskStatus.PAUSED
 

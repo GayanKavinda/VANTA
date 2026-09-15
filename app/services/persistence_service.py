@@ -2,7 +2,7 @@ import time
 
 from app.core.task_manager import DownloadTask, TaskStatus
 from app.core.downloader import DownloadManager
-from app.database.repositories import save_download_task
+from app.database.repositories import save_download_task, fix_database_issues
 from app.utils.logger import get_logger
 
 log = get_logger("vanta.services.persistence")
@@ -49,3 +49,18 @@ class PersistenceService:
 
         for task in self._download_manager.download_tasks:
             self._persist(task)
+
+    def validate_database(self):
+        """Validate database for consistency issues."""
+        from app.database.repositories import validate_database
+        return validate_database()
+
+    def fix_database(self):
+        """Fix database consistency issues."""
+        from app.database.repositories import fix_database_issues
+        return fix_database_issues()
+
+    def flush_and_validate(self):
+        """Flush all tasks and validate database."""
+        self.flush()
+        return self.validate_database()
