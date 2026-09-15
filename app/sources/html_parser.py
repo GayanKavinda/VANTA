@@ -1,6 +1,10 @@
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Optional
+from app.sources.link_classifier import (
+    is_fragment_only,
+    is_ignored_scheme,
+)
 
 
 # V1.15 — Production hardening: parsing limits
@@ -16,6 +20,14 @@ class AnchorLink:
     text: str
 
 
+@dataclass(frozen=True)
+class ResourceCandidate:
+    url: str
+    element_type: str
+    anchor_text: str = ""
+    type_hint: str = ""
+
+
 class HTMLPageParser(HTMLParser):
     """Lightweight stdlib HTML parser for page title and anchor links.
 
@@ -26,6 +38,8 @@ class HTMLPageParser(HTMLParser):
     - Excessive number of links
     - Excessive title length
     - Excessive total text size
+
+    Phase 3.2: Discovers media/resource elements (video, audio, source, img, picture, embed, object).
     """
 
     def __init__(self):
@@ -39,12 +53,12 @@ class HTMLPageParser(HTMLParser):
         self._current_text_parts: list[str] = []
         self._links: list[AnchorLink] = []
 
-        # V1.15 — Protection state
+        self._resources: list[ResourceCandidate] = []
+
         self._nesting_depth: int = 0
         self._max_nesting_depth: int = 0
         self._total_text_size: int = 0
         self._link_count: int = 0
-        # When depth exceeds the limit, stop processing tags/data entirely
         self._depth_exceeded: bool = False
 
     @property
@@ -57,6 +71,28 @@ class HTMLPageParser(HTMLParser):
     @property
     def links(self) -> list[AnchorLink]:
         return list(self._links)
+
+    @property
+    def resources(self) -> list[ResourceCandidate]:
+        return list(self._resources)
+
+    def _add_resource(self, url: str, element_type: str, type_hint: str = ""):
+        if not url:
+            return
+        url = url.strip()
+        if not url:
+            return
+        if is_ignored_scheme(url):
+            return
+        if is_fragment_only(url):
+            return
+        if self._depth_exceeded:
+            return
+        self._resources.append(ResourceCandidate(
+            url=url,
+            element_type=element_type,
+            type_hint=type_hint,
+        ))
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]):
         tag = tag.lower()
@@ -71,6 +107,50 @@ class HTMLPageParser(HTMLParser):
             self._in_anchor = True
             self._current_href = attr_map.get("href")
             self._current_text_parts = []
+
+        if tag == "a" and attr_map.get("href"):
+            self._add_resource(attr_map["href"], "link")
+
+        if tag == "img":
+            src = attr_map.get("src")
+            if src:
+                self._add_resource(src, "image")
+            poster = attr_map.get("poster")
+            if poster:
+                self._add_resource(poster, "image")
+            srcset = attr_map.get("srcset")
+            if srcset:
+                for src_url in _parse_srcset(srcset):
+                    self._add_resource(src_url, "image")
+
+        if tag == "video":
+            src = attr_map.get("src")
+            if src:
+                self._add_resource(src, "video")
+            poster = attr_map.get("poster")
+            if poster:
+                self._add_resource(poster, "image")
+
+        if tag == "audio":
+            src = attr_map.get("src")
+            if src:
+                self._add_resource(src, "audio")
+
+        if tag == "source":
+            src = attr_map.get("src")
+            srcset = attr_map.get("srcset")
+            type_hint = attr_map.get("type", "")
+            if src:
+                self._add_resource(src, "source", type_hint=type_hint)
+            if srcset:
+                for src_url in _parse_srcset(srcset):
+                    self._add_resource(src_url, "source", type_hint=type_hint)
+
+        if tag == "object" and attr_map.get("data"):
+            self._add_resource(attr_map["data"], "source")
+
+        if tag == "embed" and attr_map.get("src"):
+            self._add_resource(attr_map["src"], "source")
 
         # V1.15 — Track nesting depth and stop traversal when exceeded
         self._nesting_depth += 1
@@ -126,6 +206,20 @@ class HTMLPageParser(HTMLParser):
     def error(self, message: str):
         # Suppress parser errors for malformed HTML
         return
+
+
+def _parse_srcset(srcset: str) -> list[str]:
+    urls: list[str] = []
+    for item in srcset.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        parts = item.split()
+        if parts:
+            url = parts[0]
+            if url and not url.startswith("data:") and "." in url:
+                urls.append(url)
+    return urls
 
 
 def parse_html(html: str) -> HTMLPageParser:

@@ -74,6 +74,7 @@ class GenericSourceAdapter(BaseSourceAdapter):
             capabilities=frozenset({
                 SourceCapability.WEBPAGE_DISCOVERY,
                 SourceCapability.HTML_LINK_DISCOVERY,
+                SourceCapability.MEDIA_ELEMENT_DISCOVERY,
                 SourceCapability.RESOURCE_PROBING,
             }),
         )
@@ -201,7 +202,7 @@ class GenericSourceAdapter(BaseSourceAdapter):
         parser = parse_html(html)
         title = parser.title or page_url
 
-        files = await self._discover_files(parser.links, page_url)
+        files = await self._discover_files(parser.resources, page_url)
 
         return AnalysisResult(
             title=title,
@@ -210,13 +211,13 @@ class GenericSourceAdapter(BaseSourceAdapter):
             status="ready" if files else "unsupported",
         )
 
-    async def _discover_files(self, links, page_url: str) -> list[DownloadFile]:
+    async def _discover_files(self, candidates, page_url: str) -> list[DownloadFile]:
         obvious: list[dict] = []
         ambiguous: list[dict] = []
         text_by_url: dict[str, str] = {}
 
-        for link in links:
-            href = (link.href or "").strip()
+        for candidate in candidates:
+            href = (candidate.url or "").strip()
             if not href:
                 continue
             if is_ignored_scheme(href):
@@ -230,12 +231,12 @@ class GenericSourceAdapter(BaseSourceAdapter):
             normalized = normalize_url(absolute)
 
             if is_download_candidate(href):
-                obvious.append({"url": normalized, "anchor_text": link.text or ""})
+                obvious.append({"url": normalized, "anchor_text": candidate.anchor_text or ""})
             else:
-                ambiguous.append({"url": normalized, "anchor_text": link.text or ""})
+                ambiguous.append({"url": normalized, "anchor_text": candidate.anchor_text or ""})
 
-            if link.text:
-                text_by_url.setdefault(normalized, link.text.strip())
+            if candidate.anchor_text:
+                text_by_url.setdefault(normalized, candidate.anchor_text.strip())
 
         seen: set[str] = set()
         combined: list[dict] = []
