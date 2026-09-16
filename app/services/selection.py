@@ -7,6 +7,8 @@ unaware of selection.
 from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
+from app.services.analysis_view import ResourceView
+
 
 @dataclass
 class SelectionState:
@@ -117,7 +119,6 @@ class ResourceSelectionController:
 
 
 def resource_id_for(view) -> str:
-    from app.services.analysis_view import ResourceView
     if isinstance(view, ResourceView):
         return f"{view.file.url}|{view.file.name}"
     if isinstance(view, dict):
@@ -126,3 +127,101 @@ def resource_id_for(view) -> str:
     if isinstance(rid, str):
         return rid
     return str(getattr(view, "url", id(view)))
+
+
+@dataclass
+class SelectionSummary:
+    """Aggregate view of the currently selected resources.
+
+    All size accounting preserves the "unknown" fact rather than pretending
+    unknown sizes are zero, so totals are never misleading.
+    """
+
+    count: int
+    known_size_bytes: int
+    unknown_size_count: int
+    categories: list[str]
+    duplicate_count: int
+
+    @property
+    def has_size(self) -> bool:
+        return self.known_size_bytes > 0 or self.unknown_size_count > 0
+
+    @property
+    def total_size_label(self) -> str:
+        """Human-readable total size, preserving unknown counts."""
+        from app.services.analysis_view import format_size
+
+        if self.count == 0:
+            return ""
+        parts: list[str] = []
+        if self.known_size_bytes > 0:
+            parts.append(format_size(self.known_size_bytes))
+        if self.unknown_size_count > 0:
+            parts.append(f"{self.unknown_size_count} unknown")
+        if not parts:
+            return ""
+        return " + ".join(parts)
+
+
+def compute_selection_summary(selected_views: list[ResourceView]) -> SelectionSummary:
+    """Build a `SelectionSummary` from the selected `ResourceView` instances.
+
+    Pure and non-mutating. Categories are derived via the existing
+    `categorize_resource` service so the summary stays consistent with the
+    grouping the user already sees. A resource with `duplicate_is_duplicate`
+    flagged is counted as a duplicate.
+    """
+    from app.services.categorization import categorize_resource
+
+    known_size = 0
+    unknown_size = 0
+    seen_categories: set[str] = set()
+    duplicate_count = 0
+
+    for view in selected_views:
+        size = view.file.size
+        if size is not None and size >= 0:
+            known_size += size
+        else:
+            unknown_size += 1
+
+        category = categorize_resource(view)
+        if category.value != "unknown":
+            seen_categories.add(category.value.capitalize())
+
+        if getattr(view, "duplicate_is_duplicate", False):
+            duplicate_count += 1
+
+    return SelectionSummary(
+        count=len(selected_views),
+        known_size_bytes=known_size,
+        unknown_size_count=unknown_size,
+        categories=sorted(seen_categories),
+        duplicate_count=duplicate_count,
+    )
+
+
+def format_selection_summary(summary: "SelectionSummary") -> str:
+    """Render a `SelectionSummary` as a short multi-line label.
+
+    Omitted entirely when there is nothing to say, so callers can hide the
+    summary region for an empty selection.
+    """
+    if summary.count == 0:
+        return "No resources selected"
+
+    lines: list[str] = []
+    noun = "resource" if summary.count == 1 else "resources"
+    lines.append(f"{summary.count} {noun} selected")
+
+    if summary.has_size:
+        lines.append(f"Total size: {summary.total_size_label}")
+
+    if summary.categories:
+        lines.append(f"Categories: {', '.join(summary.categories)}")
+
+    if summary.duplicate_count > 0:
+        lines.append(f"Duplicates: {summary.duplicate_count}")
+
+    return "\n".join(lines)

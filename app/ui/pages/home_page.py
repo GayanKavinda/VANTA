@@ -37,8 +37,11 @@ from app.services.grouping import (
 from app.services.selection import (
     ResourceSelectionController,
     SelectionState,
+    compute_selection_summary,
+    format_selection_summary,
     resource_id_for,
 )
+from app.services.search import search_resources
 from app.services.sorting import (
     SortMode,
     SortSpec,
@@ -79,6 +82,7 @@ class HomePage(QWidget):
         self._result_area.details_requested.connect(self._on_details_requested)
         self._result_area.filter_changed.connect(self._on_filter_changed)
         self._result_area.sort_changed.connect(self._on_sort_changed)
+        self._result_area.search_changed.connect(self._on_search_changed)
 
         footer = FooterWidget()
 
@@ -154,16 +158,25 @@ class HomePage(QWidget):
         else:
             if self._selection.is_selected(resource_id):
                 self._selection.toggle(resource_id)
-        self._result_area.refresh_selection_toolbar(self._selection.state)
+        self._result_area.refresh_selection_toolbar(
+            self._selection.state,
+            self._selected_views(),
+        )
 
     def _on_select_all(self):
         self._selection.select_all()
-        self._result_area.refresh_selection_toolbar(self._selection.state)
+        self._result_area.refresh_selection_toolbar(
+            self._selection.state,
+            self._selected_views(),
+        )
         self._result_area.refresh_row_checkboxes(self._selection)
 
     def _on_deselect_all(self):
         self._selection.deselect_all()
-        self._result_area.refresh_selection_toolbar(self._selection.state)
+        self._result_area.refresh_selection_toolbar(
+            self._selection.state,
+            self._selected_views(),
+        )
         self._result_area.refresh_row_checkboxes(self._selection)
 
     def _on_select_visible(self):
@@ -171,7 +184,10 @@ class HomePage(QWidget):
             return
         visible = self._result_area._visible_resource_ids()
         self._selection.select_visible(visible)
-        self._result_area.refresh_selection_toolbar(self._selection.state)
+        self._result_area.refresh_selection_toolbar(
+            self._selection.state,
+            self._selected_views(),
+        )
         self._result_area.refresh_row_checkboxes(self._selection)
 
     def _on_deselect_visible(self):
@@ -179,7 +195,10 @@ class HomePage(QWidget):
             return
         visible = self._result_area._visible_resource_ids()
         self._selection.deselect_visible(visible)
-        self._result_area.refresh_selection_toolbar(self._selection.state)
+        self._result_area.refresh_selection_toolbar(
+            self._selection.state,
+            self._selected_views(),
+        )
         self._result_area.refresh_row_checkboxes(self._selection)
 
     def _on_filter_changed(self, filter_spec: ResourceFilter):
@@ -190,7 +209,8 @@ class HomePage(QWidget):
             self._selection,
         )
         self._result_area.refresh_selection_toolbar(
-            self._selection.state
+            self._selection.state,
+            self._selected_views(),
         )
 
     def _on_sort_changed(self, sort_spec: SortSpec):
@@ -201,8 +221,26 @@ class HomePage(QWidget):
             self._selection,
         )
         self._result_area.refresh_selection_toolbar(
-            self._selection.state
+            self._selection.state,
+            self._selected_views(),
         )
+
+    def _on_search_changed(self, query: str):
+        if not self._current_view:
+            return
+        self._result_area.refresh_resources(
+            self._current_view,
+            self._selection,
+        )
+        self._result_area.refresh_selection_toolbar(
+            self._selection.state,
+            self._selected_views(),
+        )
+
+    def _selected_views(self) -> list:
+        if not self._current_view:
+            return []
+        return self._selection.selected_resources(self._current_view.resources)
 
     def _on_download_selected(self):
         if not self._current_source_url or not self._current_view:
@@ -282,6 +320,7 @@ class ResultArea(QWidget):
     details_requested = Signal(object)
     filter_changed = Signal(object)
     sort_changed = Signal(object)
+    search_changed = Signal(str)
 
     def __init__(self):
         super().__init__()
@@ -289,6 +328,7 @@ class ResultArea(QWidget):
         self._current_url: str | None = None
         self._filter_spec: ResourceFilter = ResourceFilter(FilterMode.ALL)
         self._sort_spec: SortSpec = SortSpec(SortMode.RECOMMENDED)
+        self._search_text: str = ""
 
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
@@ -334,6 +374,10 @@ class ResultArea(QWidget):
         )
         self._resource_list.hide()
         self._layout.addWidget(self._resource_list)
+
+        self._filtered_empty = self._build_filtered_empty_state()
+        self._layout.addWidget(self._filtered_empty)
+        self._filtered_empty.hide()
 
         self._layout.addStretch(1)
 
@@ -433,6 +477,44 @@ class ResultArea(QWidget):
 
         return frame
 
+    def _build_filtered_empty_state(self) -> QFrame:
+        frame = QFrame()
+        frame.setObjectName("empty_state")
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(12)
+        layout.setAlignment(Qt.AlignCenter)
+
+        title = QLabel("No resources match the current filters.")
+        title.setObjectName("empty_state_title")
+        title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
+
+        body = QLabel(
+            "Adjust the search, filter, or sort above, or clear the active filters."
+        )
+        body.setObjectName("empty_state_body")
+        body.setWordWrap(True)
+        body.setAlignment(Qt.AlignCenter)
+        layout.addWidget(body)
+
+        clear_btn = QPushButton("Clear Filters")
+        clear_btn.setObjectName("secondary")
+        clear_btn.setFixedHeight(36)
+        clear_btn.clicked.connect(self._on_clear_filters)
+        layout.addWidget(clear_btn, alignment=Qt.AlignCenter)
+
+        self._filtered_empty_title = title
+        self._filtered_empty_body = body
+        self._clear_filters_btn = clear_btn
+
+        return frame
+
+    def _on_clear_filters(self):
+        self.reset_controls()
+        self.filter_changed.emit(self._filter_spec)
+        self.search_changed.emit(self._search_text)
+
     def _build_control_bar(self) -> QFrame:
         frame = QFrame()
         layout = QHBoxLayout(frame)
@@ -451,6 +533,7 @@ class ResultArea(QWidget):
                 "Medium",
                 "Low",
                 "File Type",
+                "Category",
             ]
         )
         self._filter_combo.setFixedWidth(140)
@@ -464,7 +547,18 @@ class ResultArea(QWidget):
         self._file_type_combo.setFixedWidth(130)
         self._file_type_combo.currentIndexChanged.connect(self._on_file_type_changed)
         self._file_type_combo.setEnabled(False)
+        self._file_type_combo.hide()
         layout.addWidget(self._file_type_combo)
+
+        self._category_combo = QComboBox()
+        self._category_combo.addItems(
+            ["Archive", "Installer", "Documentation", "Patch", "Part"]
+        )
+        self._category_combo.setFixedWidth(140)
+        self._category_combo.currentIndexChanged.connect(self._on_category_changed)
+        self._category_combo.setEnabled(False)
+        self._category_combo.hide()
+        layout.addWidget(self._category_combo)
 
         sort_label = QLabel("Sort:")
         sort_label.setObjectName("section_meta")
@@ -485,6 +579,13 @@ class ResultArea(QWidget):
         self._sort_combo.setFixedWidth(170)
         self._sort_combo.currentIndexChanged.connect(self._on_sort_index_changed)
         layout.addWidget(self._sort_combo)
+
+        self._search_input = QLineEdit()
+        self._search_input.setPlaceholderText("Search resources...")
+        self._search_input.setFixedHeight(32)
+        self._search_input.setFixedWidth(220)
+        self._search_input.textChanged.connect(self._on_search_text_changed)
+        layout.addWidget(self._search_input)
 
         layout.addStretch(1)
 
@@ -541,21 +642,32 @@ class ResultArea(QWidget):
             2: FilterMode.MEDIUM,
             3: FilterMode.LOW,
             4: FilterMode.FILE_TYPE,
+            5: FilterMode.CATEGORY,
         }
         mode = mode_map.get(index, FilterMode.ALL)
-        if mode is FilterMode.FILE_TYPE:
-            self._file_type_combo.setEnabled(True)
-            file_type = self._file_type_combo.currentText()
-            try:
+        try:
+            if mode is FilterMode.FILE_TYPE:
+                self._file_type_combo.setEnabled(True)
+                self._file_type_combo.show()
+                self._category_combo.hide()
+                self._category_combo.setEnabled(False)
+                file_type = self._file_type_combo.currentText()
                 self._filter_spec = ResourceFilter(FilterMode.FILE_TYPE, file_type=file_type)
-            except ValueError:
-                self._filter_spec = ResourceFilter(FilterMode.ALL)
-        else:
-            self._file_type_combo.setEnabled(False)
-            try:
+            elif mode is FilterMode.CATEGORY:
+                self._file_type_combo.hide()
+                self._file_type_combo.setEnabled(False)
+                self._category_combo.setEnabled(True)
+                self._category_combo.show()
+                category = self._category_combo.currentText()
+                self._filter_spec = ResourceFilter(FilterMode.CATEGORY, category=category)
+            else:
+                self._file_type_combo.hide()
+                self._file_type_combo.setEnabled(False)
+                self._category_combo.hide()
+                self._category_combo.setEnabled(False)
                 self._filter_spec = ResourceFilter(mode)
-            except ValueError:
-                self._filter_spec = ResourceFilter(FilterMode.ALL)
+        except ValueError:
+            self._filter_spec = ResourceFilter(FilterMode.ALL)
         self.filter_changed.emit(self._filter_spec)
 
     def _on_file_type_changed(self, index: int):
@@ -563,6 +675,15 @@ class ResultArea(QWidget):
             file_type = self._file_type_combo.itemText(index)
             try:
                 self._filter_spec = ResourceFilter(FilterMode.FILE_TYPE, file_type=file_type)
+            except ValueError:
+                self._filter_spec = ResourceFilter(FilterMode.ALL)
+            self.filter_changed.emit(self._filter_spec)
+
+    def _on_category_changed(self, index: int):
+        if self._filter_spec.mode is FilterMode.CATEGORY:
+            category = self._category_combo.itemText(index)
+            try:
+                self._filter_spec = ResourceFilter(FilterMode.CATEGORY, category=category)
             except ValueError:
                 self._filter_spec = ResourceFilter(FilterMode.ALL)
             self.filter_changed.emit(self._filter_spec)
@@ -584,14 +705,23 @@ class ResultArea(QWidget):
             self._sort_spec = SortSpec(SortMode.RECOMMENDED)
         self.sort_changed.emit(self._sort_spec)
 
+    def _on_search_text_changed(self, text: str):
+        self._search_text = text
+        self.search_changed.emit(text)
+
     def clear(self):
         self._loading.hide()
         self._error.hide()
         self._unsupported.hide()
+        self._filtered_empty.hide()
         self._selection_warning.hide()
         self._section_title.hide()
         self._selection_toolbar.hide()
         self._resource_list.hide()
+        self._search_input.blockSignals(True)
+        self._search_input.clear()
+        self._search_input.blockSignals(False)
+        self._search_text = ""
         self._resource_list.clear()
         self._resource_rows = []
         self._current_url = None
@@ -623,60 +753,87 @@ class ResultArea(QWidget):
 
         self._filter_combo.blockSignals(True)
         self._sort_combo.blockSignals(True)
+        self._search_input.blockSignals(True)
 
         self._filter_combo.setCurrentIndex(0)
         self._sort_combo.setCurrentIndex(0)
+        self._search_input.clear()
+        self._search_text = ""
 
         self._filter_combo.blockSignals(False)
         self._sort_combo.blockSignals(False)
+        self._search_input.blockSignals(False)
 
         self._file_type_combo.setEnabled(False)
+        self._file_type_combo.hide()
+        self._category_combo.setEnabled(False)
+        self._category_combo.hide()
 
     def _render_resources(
         self,
         vm: AnalysisViewModel,
         selection: ResourceSelectionController,
     ):
-        # V1.9 pipeline: Filter → Sort → Group (presentation only).
-        filtered = apply_filter(vm.resources, self._filter_spec)
+        # V2.0 Phase 3.7 pipeline: Search → Filter → Sort → Group (presentation only).
+        # Search and filtering never remove resources from the underlying result;
+        # they only narrow the visible working set, so selection state is preserved.
+        searched = search_resources(self._search_text, vm.resources)
+        filtered = apply_filter(searched, self._filter_spec)
         sorted_view = sort_resources(filtered, self._sort_spec)
         grouped = group_resources(sorted_view)
 
         self._resource_list.clear()
         self._resource_rows = []
 
-        for group, label in (
-            (grouped.main, "Main"),
-            (grouped.optional, "Optional"),
-            (grouped.other, "Other"),
-        ):
-            if not group:
-                continue
-            header_item = QListWidgetItem(self._resource_list)
-            header_item.setData(Qt.UserRole, "group_header")
-            header_item.setSizeHint(QSize(0, 22))
-            self._resource_list.addItem(header_item)
-            header_label = QLabel(label.upper())
-            header_label.setObjectName("section_meta")
-            self._resource_list.setItemWidget(header_item, header_label)
+        has_visible = grouped.total() > 0
+        if has_visible:
+            for group, label in (
+                (grouped.main, "Main"),
+                (grouped.optional, "Optional"),
+                (grouped.other, "Other"),
+            ):
+                if not group:
+                    continue
+                header_item = QListWidgetItem(self._resource_list)
+                header_item.setData(Qt.UserRole, "group_header")
+                header_item.setSizeHint(QSize(0, 22))
+                self._resource_list.addItem(header_item)
+                header_label = QLabel(label.upper())
+                header_label.setObjectName("section_meta")
+                self._resource_list.setItemWidget(header_item, header_label)
 
-            for rv in group:
-                item = QListWidgetItem(self._resource_list)
-                row = ResourceRow(rv)
-                item.setSizeHint(row.sizeHint())
-                self._resource_list.addItem(item)
-                self._resource_list.setItemWidget(item, row)
+                for rv in group:
+                    item = QListWidgetItem(self._resource_list)
+                    row = ResourceRow(rv)
+                    item.setSizeHint(row.sizeHint())
+                    self._resource_list.addItem(item)
+                    self._resource_list.setItemWidget(item, row)
 
-                row.download_clicked.connect(lambda checked=False, r=rv: self.download_clicked.emit(r))
-                row.selection_changed.connect(self.selection_changed.emit)
-                row.details_clicked.connect(self.details_requested.emit)
+                    row.download_clicked.connect(lambda checked=False, r=rv: self.download_clicked.emit(r))
+                    row.selection_changed.connect(self.selection_changed.emit)
+                    row.details_clicked.connect(self.details_requested.emit)
+                    row.copy_url_clicked.connect(self._on_resource_copy_url)
 
-                self._resource_rows.append(row)
+                    self._resource_rows.append(row)
 
-        self._resource_list.show()
+        # Distinguish "no match for current filters/search" from "no resources
+        # discovered at all" (the latter is shown via the unsupported state).
+        if has_visible:
+            self._resource_list.show()
+            self._filtered_empty.hide()
+        else:
+            self._resource_list.hide()
+            if vm.has_resources:
+                self._filtered_empty.show()
+            else:
+                self._filtered_empty.hide()
+
         self._control_bar.show()
         self._selection_toolbar.show()
-        self.refresh_selection_toolbar(selection.state)
+        self.refresh_selection_toolbar(
+            selection.state,
+            selection.selected_resources(vm.resources),
+        )
         self.refresh_row_checkboxes(selection)
 
     def show_unsupported(self, title_text: str, body_text: str):
@@ -702,12 +859,17 @@ class ResultArea(QWidget):
     def clear_selection_warning(self):
         self._selection_warning.hide()
 
-    def refresh_selection_toolbar(self, state: SelectionState):
+    def refresh_selection_toolbar(self, state: SelectionState, selected_views: list | None = None):
         if not self._selection_toolbar.isVisible():
             return
-        self._selection_summary.setText(
-            f"{state.count} of {state.eligible_count} selected"
-        )
+        selected_views = selected_views or []
+        if state.count > 0:
+            summary = compute_selection_summary(selected_views)
+            self._selection_summary.setText(format_selection_summary(summary))
+        else:
+            self._selection_summary.setText(
+                f"0 of {state.eligible_count} selected"
+            )
         self._select_all_btn.setEnabled(state.eligible_count > 0 and not state.all_eligible_selected)
         self._deselect_all_btn.setEnabled(state.any_selected)
         self._download_selected_btn.setEnabled(state.any_selected)
@@ -737,6 +899,13 @@ class ResultArea(QWidget):
         if self._current_url:
             clipboard = QGuiApplication.clipboard()
             clipboard.setText(self._current_url)
+
+    def _on_resource_copy_url(self, url: str):
+        if url:
+            clipboard = QGuiApplication.clipboard()
+            clipboard.setText(url)
+            self._selection_warning.setText("Resource URL copied to clipboard.")
+            self._selection_warning.show()
             log.info("URL copied to clipboard")
 
 
@@ -744,6 +913,7 @@ class ResourceRow(QFrame):
     download_clicked = Signal()
     selection_changed = Signal(str, bool)
     details_clicked = Signal()
+    copy_url_clicked = Signal(str)
 
     def __init__(self, view: ResourceView):
         super().__init__()
@@ -777,6 +947,11 @@ class ResourceRow(QFrame):
         badge_obj = f"confidence_{view.confidence}"
         self._badge.setObjectName(badge_obj)
         top_row.addWidget(self._badge)
+
+        if getattr(view, "duplicate_is_duplicate", False):
+            dup_badge = QLabel("Duplicate")
+            dup_badge.setObjectName("duplicate_badge")
+            top_row.addWidget(dup_badge)
 
         size_text = view.size_label or "Unknown size"
         size_label = QLabel(size_text)
@@ -815,6 +990,16 @@ class ResourceRow(QFrame):
         details_btn.setFixedWidth(110)
         details_btn.clicked.connect(self.details_clicked.emit)
         actions.addWidget(details_btn)
+
+        copy_url_btn = QPushButton("Copy URL")
+        copy_url_btn.setObjectName("secondary")
+        copy_url_btn.setProperty("size", "small")
+        copy_url_btn.setFixedWidth(110)
+        copy_url_btn.setToolTip("Copy resource URL to clipboard")
+        copy_url_btn.clicked.connect(
+            lambda checked=False, v=view: self.copy_url_clicked.emit(v.final_url or v.file.url)
+        )
+        actions.addWidget(copy_url_btn)
 
         outer.addLayout(actions)
 

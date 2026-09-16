@@ -28,6 +28,7 @@ class FilterMode(str, Enum):
     """Supported resource filters.
 
     `FILE_TYPE` is parameterized by `ResourceFilter.file_type`.
+    `CATEGORY` is parameterized by `ResourceFilter.category`.
     Any unknown / unrecognised mode is rejected; callers should not pass
     arbitrary strings. This keeps the API explicit and prevents silent
     fallbacks.
@@ -38,6 +39,7 @@ class FilterMode(str, Enum):
     MEDIUM = "medium"
     LOW = "low"
     FILE_TYPE = "file_type"
+    CATEGORY = "category"
 
 
 @dataclass(frozen=True)
@@ -46,12 +48,15 @@ class ResourceFilter:
 
     `mode` is the primary discriminator. For `FILE_TYPE` filters, callers
     must also supply `file_type` (case-insensitive, no leading dot).
-    Construction validates invariants so we never construct a malformed
-    filter (e.g. `FILE_TYPE` without a file type).
+    For `CATEGORY` filters, callers must also supply `category` (a value
+    understood by `app.services.categorization.categorize_resource`,
+    case-insensitive). Construction validates invariants so we never construct
+    a malformed filter (e.g. `FILE_TYPE` without a file type).
     """
 
     mode: FilterMode = FilterMode.ALL
     file_type: Optional[str] = None
+    category: Optional[str] = None
 
     def __post_init__(self):
         if self.file_type is not None:
@@ -61,12 +66,29 @@ class ResourceFilter:
             if any(ch.isspace() for ch in normalized):
                 raise ValueError("file_type must not contain whitespace")
             object.__setattr__(self, "file_type", normalized)
-        if self.mode is FilterMode.FILE_TYPE and not self.file_type:
-            raise ValueError("ResourceFilter with mode=FILE_TYPE requires file_type")
-        if self.mode is not FilterMode.FILE_TYPE and self.file_type is not None:
-            raise ValueError(
-                "file_type is only valid when mode=FILE_TYPE"
-            )
+        if self.category is not None:
+            normalized = self.category.strip().lower()
+            if not normalized:
+                raise ValueError("category must be a non-empty string when provided")
+            if any(ch.isspace() for ch in normalized):
+                raise ValueError("category must not contain whitespace")
+            object.__setattr__(self, "category", normalized)
+
+        if self.mode is FilterMode.FILE_TYPE:
+            if not self.file_type:
+                raise ValueError("ResourceFilter with mode=FILE_TYPE requires file_type")
+            if self.category is not None:
+                raise ValueError("category is only valid when mode=CATEGORY")
+        elif self.mode is FilterMode.CATEGORY:
+            if not self.category:
+                raise ValueError("ResourceFilter with mode=CATEGORY requires category")
+            if self.file_type is not None:
+                raise ValueError("file_type is only valid when mode=FILE_TYPE")
+        else:
+            if self.file_type is not None:
+                raise ValueError("file_type is only valid when mode=FILE_TYPE")
+            if self.category is not None:
+                raise ValueError("category is only valid when mode=CATEGORY")
 
 
 def _confidence_matches(view: ResourceView, mode: FilterMode) -> bool:
@@ -131,6 +153,21 @@ def _matches_file_type(view: ResourceView, file_type: str) -> bool:
     return False
 
 
+def _matches_category(view: ResourceView, category: str) -> bool:
+    """Return True if the resource is categorized as `category`.
+
+    Uses the existing `categorize_resource` service so filtering stays
+    consistent with grouping. Matching is case-insensitive against the
+    resource category value (e.g. ``"archive"``).
+    """
+    from app.services.categorization import categorize_resource
+
+    target = (category or "").strip().lower()
+    if not target:
+        return False
+    return categorize_resource(view).value == target
+
+
 def apply_filter(
     resources: Iterable[ResourceView],
     filter_spec: ResourceFilter,
@@ -146,5 +183,9 @@ def apply_filter(
     if filter_spec.mode is FilterMode.FILE_TYPE:
         target = filter_spec.file_type or ""
         return [r for r in resources if _matches_file_type(r, target)]
+
+    if filter_spec.mode is FilterMode.CATEGORY:
+        target = filter_spec.category or ""
+        return [r for r in resources if _matches_category(r, target)]
 
     return [r for r in resources if _confidence_matches(r, filter_spec.mode)]
