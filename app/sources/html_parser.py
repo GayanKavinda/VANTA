@@ -81,6 +81,9 @@ class HTMLPageParser(HTMLParser):
         self._links: list[AnchorLink] = []
 
         self._resources: list[ResourceCandidate] = []
+        self._pending_anchor_index: int | None = None
+        self._pending_anchor_href: str | None = None
+        self._pending_anchor_hint: str = ""
 
         self._nesting_depth: int = 0
         self._max_nesting_depth: int = 0

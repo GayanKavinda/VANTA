@@ -197,6 +197,18 @@ class ResourceIntelligence:
         duplicate_intel = self._detect_duplicate(probe_result, filename_intel, size_intel, reasons)
         quality = self._assess_quality(probe_result, filename_intel, size_intel, mime_intel, duplicate_intel, reasons)
 
+        probe_result.filename_source = filename_intel.source
+        probe_result.mime_source = mime_intel.source
+        probe_result.mime_media_type = mime_intel.media_type
+        probe_result.mime_category = mime_intel.category
+        probe_result.quality = quality
+        probe_result.duplicate_is_duplicate = duplicate_intel.is_duplicate
+        probe_result.duplicate_reason = duplicate_intel.reason
+        probe_result.size_source = size_intel.source
+        probe_result.intelligence_reasons = list(reasons)
+        if probe_result.size is None and size_intel.size is not None:
+            probe_result.size = size_intel.size
+
         return ResourceIntelligenceResult(
             filename=filename_intel,
             size=size_intel,

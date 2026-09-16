@@ -33,6 +33,17 @@ class ResourceProbeResult:
     content_length: Optional[str] = None
     content_range: Optional[str] = None
 
+    # V2.0 Phase 3.6 — Intelligence summary populated by ResourceIntelligence.enrich()
+    filename_source: str = ""
+    mime_source: str = ""
+    mime_media_type: Optional[str] = None
+    mime_category: str = ""
+    quality: str = ""
+    duplicate_is_duplicate: bool = False
+    duplicate_reason: str = ""
+    size_source: str = ""
+    intelligence_reasons: list[str] = field(default_factory=list)
+
 
 @dataclass
 class ResolvedResource:
@@ -45,6 +56,23 @@ class ResolvedResource:
     score: int
     confidence: str
     reasons: list[str] = field(default_factory=list)
+
+    # V2.0 Phase 3.6 — Intelligence fields propagated from ResourceIntelligence
+    filename_source: str = ""
+    mime_source: str = ""
+    mime_media_type: Optional[str] = None
+    mime_category: str = ""
+    quality: str = ""
+    duplicate_is_duplicate: bool = False
+    duplicate_reason: str = ""
+    size_source: str = ""
+    intelligence_reasons: list[str] = field(default_factory=list)
+
+    # V2.0 Phase 3.6 — Provenance fields populated by GenericSourceAdapter
+    element_type: str = ""
+    discovery_attribute: str = ""
+    html_type_hint: str = ""
+    discovery_paths: list[str] = field(default_factory=list)
 
 
 @dataclass

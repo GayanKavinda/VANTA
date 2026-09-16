@@ -45,6 +45,40 @@ def _is_non_resource_path(href: str) -> bool:
     return False
 
 
+def _describe_discovery_path(candidate) -> str:
+    """Return a human-readable description of how a resource was discovered."""
+    element = candidate.element_type
+    attr = candidate.discovery_attribute
+
+    if element in ("img", "image"):
+        if attr == "srcset":
+            return "image srcset"
+        if attr and attr.startswith("data-"):
+            return "lazy-loading"
+        return "image element"
+    if element == "video":
+        if attr and attr.startswith("data-"):
+            return "lazy-loading"
+        return "video element"
+    if element == "audio":
+        if attr and attr.startswith("data-"):
+            return "lazy-loading"
+        return "audio element"
+    if element == "source":
+        if attr == "srcset":
+            return "source srcset"
+        return "media source element"
+    if element == "link":
+        if attr == "preload":
+            return "preload link"
+        return "HTML link"
+    if element == "meta":
+        return "metadata"
+    if element == "object" or element == "embed":
+        return "embedded object"
+    return ""
+
+
 class GenericSourceAdapter(BaseSourceAdapter):
 
     def __init__(
@@ -224,6 +258,7 @@ class GenericSourceAdapter(BaseSourceAdapter):
 
         download_hint_by_url: dict[str, str] = {}
         candidate_evidence: dict[str, dict[str, str]] = {}
+        discovery_paths: dict[str, list[str]] = {}
         for candidate in candidates:
             href = (candidate.url or "").strip()
             if not href:
@@ -242,6 +277,12 @@ class GenericSourceAdapter(BaseSourceAdapter):
                 download_hint_by_url.setdefault(normalized, candidate.download_name_hint)
 
             evidence = {}
+            path_desc = _describe_discovery_path(candidate)
+            if path_desc:
+                discovery_paths.setdefault(normalized, [])
+                if path_desc not in discovery_paths[normalized]:
+                    discovery_paths[normalized].append(path_desc)
+
             if candidate.element_type:
                 evidence["element_type"] = candidate.element_type
             if candidate.type_hint:
@@ -281,18 +322,39 @@ class GenericSourceAdapter(BaseSourceAdapter):
         files: list[DownloadFile] = []
         for r in resolved:
             url_filename = extract_filename_from_url(r.final_url)
-            filename = (
-                r.filename
-                or url_filename
-                or download_hint_by_url.get(r.source_url)
-                or text_by_url.get(r.source_url)
-                or "download"
-            )
+
+            # Determine filename and its source (matching Phase 3.4 precedence)
+            filename_source = ""
+            if r.filename:
+                filename = r.filename
+                filename_source = r.filename_source or "url"
+            elif url_filename:
+                filename = url_filename
+                filename_source = "url"
+            elif download_hint_by_url.get(r.source_url):
+                filename = download_hint_by_url[r.source_url]
+                filename_source = "download_hint"
+            elif text_by_url.get(r.source_url):
+                filename = text_by_url[r.source_url]
+                filename_source = "anchor_text"
+            else:
+                filename = "download"
+                filename_source = "fallback"
 
             evidence = candidate_evidence.get(r.source_url, {})
             element_type = evidence.get("element_type", "")
             type_hint = evidence.get("type_hint", "")
             discovery_attribute = evidence.get("discovery_attribute", "")
+            paths = discovery_paths.get(r.source_url, [])
+
+            # V2.0 Phase 3.6 — Persist provenance on the resolved resource so
+            # the UI can display where this resource came from without
+            # re-deriving it from the candidate list.
+            r.element_type = element_type
+            r.discovery_attribute = discovery_attribute
+            r.html_type_hint = type_hint
+            r.discovery_paths = paths
+            r.filename_source = filename_source or r.filename_source
 
             if element_type in ("img", "video", "audio", "source", "object", "embed", "picture"):
                 r.reasons.append(f"discovered through {element_type} element")

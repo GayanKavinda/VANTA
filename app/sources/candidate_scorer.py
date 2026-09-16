@@ -149,6 +149,15 @@ def to_resolved_resource(
         score=score,
         confidence=confidence,
         reasons=reasons,
+        # V2.0 Phase 3.6 — Propagate intelligence from probe result
+        filename_source=probe.filename_source if probe else "",
+        mime_source=probe.mime_source if probe else "",
+        mime_media_type=probe.mime_media_type if probe else None,
+        mime_category=probe.mime_category if probe else "",
+        quality=probe.quality if probe else "",
+        duplicate_is_duplicate=probe.duplicate_is_duplicate if probe else False,
+        duplicate_reason=probe.duplicate_reason if probe else "",
+        size_source=probe.size_source if probe else "",
     )
 
 

@@ -867,19 +867,130 @@ class ResourceDetailsDialog(QDialog):
     def _render(view: ResourceView) -> str:
         from html import escape
 
+        def fmt(value: str) -> str:
+            return escape(value) if value else "<i>Unknown</i>"
+
+        def fmt_filename_source(source: str) -> str:
+            if not source:
+                return "<i>Unknown</i>"
+            mapping = {
+                "server": "Server-provided filename",
+                "content_disposition": "Server-provided filename",
+                "url": "URL filename",
+                "url_path": "URL filename",
+                "download_hint": "HTML download attribute",
+                "anchor_text": "Anchor text",
+                "fallback": "Fallback",
+                "generated": "Generated fallback",
+            }
+            return escape(mapping.get(source, source))
+
+        def fmt_mime_source(source: str) -> str:
+            if not source:
+                return "<i>Unknown</i>"
+            mapping = {
+                "mime_type": "HTTP Content-Type",
+                "extension": "File extension",
+                "none": "Not detected",
+            }
+            return escape(mapping.get(source, source))
+
+        def fmt_size_source(source: str) -> str:
+            if not source:
+                return "<i>Unknown</i>"
+            mapping = {
+                "content_length": "HTTP Content-Length",
+                "content_range": "HTTP Content-Range",
+                "probe": "Resource probe",
+                "none": "Not available",
+            }
+            return escape(mapping.get(source, source))
+
+        def fmt_quality(quality: str) -> str:
+            if not quality:
+                return "<i>Unknown</i>"
+            mapping = {
+                "direct_file": "DIRECT_FILE",
+                "high_confidence": "HIGH_CONFIDENCE",
+                "medium_confidence": "MEDIUM_CONFIDENCE",
+                "low_confidence": "LOW_CONFIDENCE",
+                "rejected": "REJECTED",
+            }
+            return escape(mapping.get(quality, quality.upper()))
+
+        def fmt_duplicate_reason(reason: str) -> str:
+            if not reason:
+                return "<i>Unknown</i>"
+            mapping = {
+                "normalized URL match": "Same URL",
+                "filename+size match": "Same filename and size",
+                "unique": "Not a duplicate",
+                "no URL": "Unknown",
+            }
+            return escape(mapping.get(reason, reason))
+
         rows = [
-            ("Filename", view.file.name or "(unnamed)"),
-            ("Confidence", f"{view.confidence_label} (score {view.score})"),
-            ("Size", view.size_label or "Unknown"),
-            ("Content-Type", view.type_label or "Unknown"),
-            ("URL", view.file.url),
+            ("Filename", fmt(view.file.name)),
+            ("Confidence", fmt(f"{view.confidence_label} (score {view.score})")),
+            ("Size", fmt(view.size_label)),
+            ("Content-Type", fmt(view.type_label)),
+            ("Source URL", fmt(view.source_url or view.file.url)),
+            ("Resolved URL", fmt(view.final_url or view.file.url)),
         ]
+
+        # V2.0 Phase 3.6 — Provenance & Intelligence section
+        provenance_rows = [
+            ("Resolution", fmt(view.resolution_explanation)),
+        ]
+
+        if view.discovery_paths:
+            paths_str = "; ".join(view.discovery_paths)
+            provenance_rows.append(("Discovery paths", fmt(paths_str)))
+        else:
+            if view.element_type:
+                provenance_rows.append(("HTML element", fmt(view.element_type)))
+            if view.discovery_attribute:
+                provenance_rows.append(("Discovery attribute", fmt(view.discovery_attribute)))
+
+        if view.html_type_hint:
+            provenance_rows.append(("HTML type hint", fmt(view.html_type_hint)))
+        if view.mime_media_type:
+            provenance_rows.append(("HTTP Content-Type", fmt(view.mime_media_type)))
+        if view.mime_source:
+            provenance_rows.append(("Content-Type detected from", fmt_mime_source(view.mime_source)))
+        if view.mime_category:
+            provenance_rows.append(("Category", fmt(view.mime_category)))
+        if view.filename_source:
+            provenance_rows.append(("Filename source", fmt_filename_source(view.filename_source)))
+        if view.size_source:
+            provenance_rows.append(("Size source", fmt_size_source(view.size_source)))
+        if view.quality:
+            provenance_rows.append(("Source quality", fmt_quality(view.quality)))
+        if view.duplicate_is_duplicate:
+            provenance_rows.append(("Duplicate", "Yes"))
+            provenance_rows.append(("Duplicate reason", fmt_duplicate_reason(view.duplicate_reason)))
+        elif view.duplicate_reason and view.duplicate_reason != "unique":
+            provenance_rows.append(("Duplicate reason", fmt_duplicate_reason(view.duplicate_reason)))
+
         body_html = "".join(
-            f"<tr><th align='left'>{escape(k)}</th><td>{escape(v)}</td></tr>"
+            f"<tr><th align='left'>{escape(k)}</th><td>{v}</td></tr>"
             for k, v in rows
         )
+        prov_html = "".join(
+            f"<tr><th align='left'>{escape(k)}</th><td>{v}</td></tr>"
+            for k, v in provenance_rows
+        )
+
+        # Deduplicate reasons for display
+        seen_reasons = set()
+        unique_reasons = []
+        for r in view.reasons:
+            if r not in seen_reasons:
+                seen_reasons.add(r)
+                unique_reasons.append(r)
+
         reasons_html = "".join(
-            f"<li>{escape(r)}</li>" for r in view.reasons
+            f"<li>{escape(r)}</li>" for r in unique_reasons
         ) or "<li><i>No resolution reasons available.</i></li>"
 
         return f"""
@@ -887,8 +998,12 @@ class ResourceDetailsDialog(QDialog):
           table {{ border-collapse: collapse; }}
           th, td {{ padding: 6px 10px; border-bottom: 1px solid #2A2C36; }}
           th {{ color: #8A8A9A; font-weight: 600; width: 30%; }}
+          h3 {{ color: #8A8A9A; font-size: 13px; margin-top: 16px; margin-bottom: 4px; }}
         </style>
+        <p><b>Basic Information</b></p>
         <table>{body_html}</table>
+        <h3>Provenance & Intelligence</h3>
+        <table>{prov_html}</table>
         <p style="color:#8A8A9A; margin-top:12px;">Resolution reasons</p>
         <ul>{reasons_html}</ul>
         """
