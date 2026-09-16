@@ -19,6 +19,7 @@ from app.services.download_service import DownloadService
 from app.services.download_workflow import DownloadWorkflowService
 from app.services.persistence_service import PersistenceService
 from app.services.settings_service import SettingsService
+from app.ui.bulk_review import BulkReviewDialog
 from app.ui.download_review import DownloadReviewDialog
 from app.ui.pages.home_page import HomePage
 from app.ui.pages.downloads_page import DownloadsPage
@@ -225,8 +226,23 @@ class MainWindow(QMainWindow):
     def _on_downloads_selected(self, source_url: str, resource_views: list):
         if not resource_views:
             return
+        # V2.0 Phase 3.8 — route selected resources through the existing
+        # review workflow before queueing. The UI never invokes the downloader
+        # directly; it emits a signal handled here.
+        proposed_dest = self._settings.download_dir()
+        dialog = BulkReviewDialog(
+            source_url=source_url,
+            resource_views=resource_views,
+            file_manager=self._app_state.file_manager,
+            download_dir=proposed_dest,
+            workflow=self._workflow,
+            parent=self,
+        )
+        if dialog.exec() != 1:
+            log.info("Bulk review cancelled by user; returning to analysis")
+            return
         asyncio.create_task(
-            self._start_bulk_downloads(source_url, resource_views)
+            self._start_reviewed_bulk_downloads(source_url, dialog.accepted_entries)
         )
 
     async def _start_resource_download(self, source_url: str, resource_view, dialog: DownloadReviewDialog | None = None):
@@ -257,23 +273,39 @@ class MainWindow(QMainWindow):
                 "Could not start this download. Check the logs.",
             )
 
-    async def _start_bulk_downloads(self, source_url: str, resource_views: list):
+    async def _start_reviewed_bulk_downloads(
+        self,
+        source_url: str,
+        accepted: list,
+    ):
+        """Queue each reviewed, READY resource via the reviewed filename+dest
+        flow (DownloadService.start_file_download). Reuses the existing
+        register_selected + queue path. Only resources the review workflow
+        considered ready are queued.
+        """
         started = 0
         failed: list[str] = []
-        for rv in resource_views:
+        for entry, filename, dest in accepted:
+            rv = entry.view
             try:
                 task = await self._download_service.start_file_download(
                     source_url=source_url,
                     file=rv.file,
+                    destination=str(dest),
+                    filename=filename,
                 )
                 if task:
-                    # Register each task so future duplicate checks see it.
+                    # Register the task so future duplicate checks see it.
                     self._workflow.register_selected(task)
                     started += 1
+                else:
+                    failed.append(getattr(rv.file, "name", "?"))
             except Exception as e:
                 log.error(
                     "Failed to start selected download '%s': %s",
-                    getattr(rv.file, "name", "?"), e, exc_info=True,
+                    getattr(rv.file, "name", "?"),
+                    e,
+                    exc_info=True,
                 )
                 failed.append(getattr(rv.file, "name", "?"))
 
