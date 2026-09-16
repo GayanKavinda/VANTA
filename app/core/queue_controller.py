@@ -296,12 +296,22 @@ class QueueController:
         self._emit_queue_change(task)
 
     def retry_download(self, task_id: str):
+        # A failed task may still be finishing its scheduler wrapper when the
+        # retry is requested. Clear the old admission before reusing its id so
+        # the retry can be admitted exactly once.
+        task = self._manager.find_task(task_id)
+        if task is None or task.status != TaskStatus.FAILED:
+            return
+        self._scheduler.on_task_removed(task_id)
+        # Reserve the id while retry reset emits QUEUED; otherwise the
+        # scheduler can launch a second retry before the manager starts its
+        # own retry task.
+        self._scheduler.on_task_retried(task)
         self._manager.retry_task(task_id)
         task = self._manager.find_task(task_id)
         if task is not None:
             # Assign queue_order from monotonic counter (end of queue)
             task.queue_order = self._next_queue_order_value()
-            self._scheduler.on_task_added(task)
             self._emit_queue_change(task)
 
     def retry_failed(self):

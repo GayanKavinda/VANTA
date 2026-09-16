@@ -122,7 +122,12 @@ class DownloadScheduler:
     async def _run_task(self, task: DownloadTask):
         """Run the download task and handle completion."""
         try:
-            await self._manager.start_download(task)
+            manager_task = await self._manager.start_download(task)
+            # DownloadManager.start_download creates and returns the task that
+            # owns the semaphore and execution lifecycle. Keep the scheduler
+            # admission active until that task reaches its terminal state.
+            if isinstance(manager_task, asyncio.Future):
+                await manager_task
         except Exception as e:
             log.error("Scheduler task %s failed: %s", task.id, e)
         finally:
@@ -137,6 +142,12 @@ class DownloadScheduler:
     def on_task_status_changed(self, task: DownloadTask, old_status: TaskStatus):
         """Handle status changes from DownloadManager."""
         if not self._running:
+            return
+
+        # DownloadManager emits QUEUED immediately before launching the
+        # manager-owned asyncio task. It is an execution handoff, not a slot
+        # release; cancelling here would cancel the retry or resumed task.
+        if task.status == TaskStatus.QUEUED:
             return
 
         # Task became active (e.g., was paused and resumed)
@@ -173,6 +184,13 @@ class DownloadScheduler:
         if not self._running:
             return
         self._schedule_pending()
+
+    def on_task_retried(self, task: DownloadTask):
+        """Reserve a failed task while the manager starts its retry."""
+        if not self._running:
+            return
+        self._scheduled_tasks.add(task.id)
+        self._active_tasks.add(task.id)
 
     def on_task_removed(self, task_id: str):
         """Called when a task is removed from the queue."""
