@@ -107,6 +107,14 @@ class DownloadService:
             # Non-review flow: auto-resolve unique path (backward compatible).
             dest_path = self._file_manager.get_unique_path(safe_name, dest_dir)
 
+        existing = self._find_existing_task(file.url, str(dest_path))
+        if existing is not None:
+            log.info(
+                "Download already registered; not duplicating queue entry: %s -> %s (%s)",
+                file.url, dest_path, existing.id,
+            )
+            return existing
+
         if self._queue_controller is not None:
             task = await self._queue_controller.add_download(
                 name=name_to_use,
@@ -127,6 +135,29 @@ class DownloadService:
 
     def get_all_tasks(self) -> list[DownloadTask]:
         return self._download_manager.download_tasks
+
+    def _find_existing_task(
+        self, download_url: str, destination: str
+    ) -> Optional[DownloadTask]:
+        """Return an existing non-terminal task for the same download URL and
+        destination, or ``None``.
+
+        This is the exactly-once queue registration guard for Phase 4.1.1:
+        when a reviewed download (explicit filename + destination) is
+        submitted more than once, the previously registered task is returned
+        instead of creating a duplicate queue entry. Identity is based on
+        ``download_url`` + reviewed ``destination`` — both established by the
+        review layer — so the queue never rediscovers or re-analyzes the
+        resource.
+        """
+        if not download_url:
+            return None
+        for task in self.get_all_tasks():
+            if task.is_terminal:
+                continue
+            if task.download_url == download_url and task.destination == destination:
+                return task
+        return None
 
     def pause_task(self, task_id: str):
         task = self._lookup(task_id)
