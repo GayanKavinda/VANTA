@@ -246,9 +246,8 @@ def _build_bulk_dialog(views, dest_dir):
 
 
 def test_reviewed_selection_enters_queue_only_ready(qapp, tmp_path):
-    """Only READY (checked + not already on disk) reviewed resources reach the
-    queue. An already-existing resource is excluded by the review layer and an
-    unchecked resource is excluded by the checkbox — neither is queued."""
+    """Only explicitly accepted (checked) resources enter the queue.
+    Already-existing files are auto-renamed and accepted under auto_rename policy."""
     from app.core.queue_controller import QueueController
 
     dest = tmp_path / "downloads"
@@ -263,9 +262,9 @@ def test_reviewed_selection_enters_queue_only_ready(qapp, tmp_path):
 
     dialog._on_download()
 
-    # Review layer accepted nothing: ready.zip was unchecked and exists.zip is
-    # already present on disk (not ready).
-    assert dialog.accepted_entries == []
+    # Review layer: ready.zip was unchecked, exists.zip is auto-renamed to exists_1.zip and accepted
+    assert len(dialog.accepted_entries) == 1
+    assert dialog.accepted_entries[0][1] == "exists_1.zip"
 
     # Route the accepted set through the real queue service.
     manager = DownloadManager(max_concurrent=0, allow_private_networks=True,
@@ -284,8 +283,9 @@ def test_reviewed_selection_enters_queue_only_ready(qapp, tmp_path):
             )
 
     asyncio.run(_route(dialog.accepted_entries))
-    assert controller.queued_count == 0
-    assert len(controller.tasks) == 0
+
+    assert controller.queued_count == 1
+    assert len(controller.tasks) == 1
 
 
 def test_ready_reviewed_resources_enter_queue_in_order(qapp, tmp_path):

@@ -329,7 +329,8 @@ def test_duplicate_cleared_after_destination_change(tmp_path):
     dialog._dest_display.setText(str(dest2))
     dialog._duplicate_check = workflow.check_duplicate(file, dialog._filename, dest2)
     assert dialog._duplicate_check.state == DuplicateState.READY
-def test_download_button_rejects_already_exists(tmp_path):
+def test_download_button_auto_renames_already_exists(tmp_path):
+    """AUTO_RENAME (default) should resolve conflict and accept."""
     from app.core.app_state import AppState
     from app.core.models import DownloadFile
     from app.services.download_workflow import DownloadWorkflowService
@@ -342,8 +343,46 @@ def test_download_button_rejects_already_exists(tmp_path):
     existing.write_bytes(b'data')
     file = DownloadFile(name='test.zip', url='http://example.com/test.zip', size=1024, content_type='application/zip')
     dc = workflow.check_duplicate(file, 'test.zip', dest)
-    dialog = DownloadReviewDialog(file=file, file_manager=app_state.file_manager, download_dir=dest, duplicate_check=dc, workflow=workflow)
-    result = dialog._on_download()
+    dialog = DownloadReviewDialog(file=file, file_manager=app_state.file_manager, download_dir=dest, duplicate_check=dc, workflow=workflow, conflict_policy='auto_rename')
+    dialog._on_download()
+    assert dialog.result() == 1
+    # Destination should be resolved to unique path
+    assert dialog.destination.name == 'test_1.zip'
+
+def test_download_button_rename_resolves_and_shows_preview(tmp_path):
+    """RENAME policy should resolve conflict and accept with preview."""
+    from app.core.app_state import AppState
+    from app.core.models import DownloadFile
+    from app.services.download_workflow import DownloadWorkflowService
+    from app.ui.download_review import DownloadReviewDialog
+    app_state = AppState()
+    workflow = DownloadWorkflowService(app_state.file_manager)
+    dest = tmp_path / 'downloads'
+    dest.mkdir()
+    existing = dest / 'test.zip'
+    existing.write_bytes(b'data')
+    file = DownloadFile(name='test.zip', url='http://example.com/test.zip', size=1024, content_type='application/zip')
+    dc = workflow.check_duplicate(file, 'test.zip', dest)
+    dialog = DownloadReviewDialog(file=file, file_manager=app_state.file_manager, download_dir=dest, duplicate_check=dc, workflow=workflow, conflict_policy='rename')
+    dialog._on_download()
+    assert dialog.result() == 1
+    assert dialog.destination.name == 'test_1.zip'
+
+def test_download_button_rejects_when_duplicate_resource(tmp_path):
+    """DUPLICATE_RESOURCE should still reject regardless of policy."""
+    from app.core.app_state import AppState
+    from app.core.models import DownloadFile
+    from app.services.download_workflow import DownloadWorkflowService
+    from app.ui.download_review import DownloadReviewDialog
+    from app.services.duplicate_service import DuplicateState
+    app_state = AppState()
+    workflow = DownloadWorkflowService(app_state.file_manager)
+    workflow.register_selected(type('T', (), {'download_url': 'http://example.com/a.zip', 'id': 'task-1', 'name': 'a.zip', 'total_size': 100})())
+    file = DownloadFile(name='b.zip', url='http://example.com/a.zip', size=200)
+    dc = workflow.check_duplicate(file, 'b.zip', tmp_path / 'any')
+    assert dc.state == DuplicateState.DUPLICATE_RESOURCE
+    dialog = DownloadReviewDialog(file=file, file_manager=app_state.file_manager, download_dir=tmp_path / 'any', duplicate_check=dc, workflow=workflow)
+    dialog._on_download()
     assert dialog.result() == 0
 
 def test_download_button_accepts_ready(tmp_path):

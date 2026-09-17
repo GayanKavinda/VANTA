@@ -12,6 +12,7 @@ DEFAULTS = {
     "theme": "dark",
     "launch_on_startup": "false",
     "check_for_updates": "true",
+    "conflict_policy": "auto_rename",
 }
 
 
@@ -75,3 +76,6 @@ class SettingsService:
 
     def theme(self) -> str:
         return self.get("theme", "dark")
+
+    def conflict_policy(self) -> str:
+        return self.get("conflict_policy", "auto_rename")

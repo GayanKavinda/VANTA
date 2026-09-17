@@ -215,6 +215,7 @@ class MainWindow(QMainWindow):
             download_dir=proposed_destination,
             duplicate_check=duplicate_check,
             workflow=self._workflow,
+            conflict_policy=self._settings.conflict_policy(),
             parent=self,
         )
         if dialog.exec() != 1:
@@ -238,6 +239,7 @@ class MainWindow(QMainWindow):
             file_manager=self._app_state.file_manager,
             download_dir=proposed_dest,
             workflow=self._workflow,
+            conflict_policy=self._settings.conflict_policy(),
             parent=self,
         )
         if dialog.exec() != 1:

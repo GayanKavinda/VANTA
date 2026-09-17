@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QRadioButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -56,6 +57,7 @@ class DownloadReviewDialog(QDialog):
         download_dir: str | Path | None = None,
         duplicate_check: DuplicateCheck | None = None,
         workflow: DownloadWorkflowService | None = None,
+        conflict_policy: str | None = None,
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
@@ -72,6 +74,8 @@ class DownloadReviewDialog(QDialog):
 
         self._filename = sanitize_filename(file.name)
         self._destination = self._download_dir
+        self._conflict_policy = conflict_policy or "auto_rename"
+        self._resolved_destination: Path | None = None
 
         self._build_ui()
         self._load_values()
@@ -114,6 +118,31 @@ class DownloadReviewDialog(QDialog):
         dest_container = QWidget()
         dest_container.setLayout(dest_row)
         form.addRow("Destination:", dest_container)
+
+        # Conflict policy row (shown when target exists)
+        self._conflict_policy_container = QWidget()
+        conflict_layout = QHBoxLayout(self._conflict_policy_container)
+        conflict_layout.setContentsMargins(0, 0, 0, 0)
+        conflict_layout.setSpacing(12)
+
+        self._policy_auto_rename = QRadioButton("Auto Rename")
+        self._policy_auto_rename.toggled.connect(self._on_policy_changed)
+        self._policy_rename = QRadioButton("Rename")
+        self._policy_rename.toggled.connect(self._on_policy_changed)
+
+        conflict_layout.addWidget(self._policy_auto_rename)
+        conflict_layout.addWidget(self._policy_rename)
+        conflict_layout.addStretch(1)
+
+        form.addRow("If File Exists:", self._conflict_policy_container)
+        self._conflict_policy_container.hide()
+
+        # Resolved destination preview (shown when RENAME is selected)
+        self._resolved_dest_display = QLineEdit()
+        self._resolved_dest_display.setReadOnly(True)
+        self._resolved_dest_display.setFixedHeight(32)
+        self._resolved_dest_display.hide()
+        form.addRow("Will Save As:", self._resolved_dest_display)
 
         self._size_label = QLabel()
         form.addRow("Size:", self._size_label)
@@ -162,6 +191,13 @@ class DownloadReviewDialog(QDialog):
             )
         )
         self._url_label.setText(self._file.url)
+
+        # Set initial conflict policy from settings/default
+        if self._conflict_policy == "rename":
+            self._policy_rename.setChecked(True)
+        else:
+            self._policy_auto_rename.setChecked(True)
+
         self._refresh_duplicate_label()
 
     def _on_filename_changed(self, text: str):
@@ -170,6 +206,13 @@ class DownloadReviewDialog(QDialog):
         self._duplicate_check = self._workflow.check_duplicate(
             self._file, self._filename, self._destination
         )
+        self._refresh_duplicate_label()
+
+    def _on_policy_changed(self):
+        if self._policy_rename.isChecked():
+            self._conflict_policy = "rename"
+        else:
+            self._conflict_policy = "auto_rename"
         self._refresh_duplicate_label()
 
     def _on_change_folder(self):
@@ -195,10 +238,30 @@ class DownloadReviewDialog(QDialog):
 
         if self._duplicate_check.state == DuplicateState.ALREADY_EXISTS:
             self._duplicate_label.setStyleSheet("color: #FFD83D; font-size: 12px;")
+            # Show conflict policy options
+            self._conflict_policy_container.show()
+            # Always resolve destination preview for ALREADY_EXISTS
+            self._resolve_destination_preview()
+            # Show preview for RENAME (explicit), hide for AUTO_RENAME (silent)
+            if self._conflict_policy == "rename":
+                self._resolved_dest_display.show()
+            else:
+                self._resolved_dest_display.hide()
         elif self._duplicate_check.state == DuplicateState.DUPLICATE_RESOURCE:
             self._duplicate_label.setStyleSheet("color: #FF6B6B; font-size: 12px;")
+            self._conflict_policy_container.hide()
+            self._resolved_dest_display.hide()
         else:
             self._duplicate_label.setStyleSheet("color: #8A8A9A; font-size: 12px;")
+            self._conflict_policy_container.hide()
+            self._resolved_dest_display.hide()
+
+    def _resolve_destination_preview(self):
+        """Resolve and show the destination that will be used when RENAME is selected."""
+        safe_name = sanitize_filename(self._filename)
+        unique_path = self._file_manager.get_unique_path(safe_name, self._destination)
+        self._resolved_destination = unique_path
+        self._resolved_dest_display.setText(str(unique_path))
 
     def _on_download(self):
         if not self._filename:
@@ -215,8 +278,9 @@ class DownloadReviewDialog(QDialog):
             log.warning("Download rejected: filename escapes destination")
             return
         if self._duplicate_check.state == DuplicateState.ALREADY_EXISTS:
-            log.warning("Download rejected: file already exists at destination")
-            return
+            # Both AUTO_RENAME and RENAME resolve to a unique safe destination
+            self._destination = self._resolved_destination
+            self._filename = self._resolved_destination.name
         self.accept()
 
     @property
@@ -226,6 +290,10 @@ class DownloadReviewDialog(QDialog):
     @property
     def destination(self) -> Path:
         return self._destination
+
+    @property
+    def conflict_policy(self) -> str:
+        return self._conflict_policy
 
     @property
     def file(self) -> DownloadFile:

@@ -134,20 +134,20 @@ def test_ready_resource_is_ready(qapp, dest_dir):
     assert "Ready" in text
 
 
-def test_already_exists_file_is_not_ready(qapp, dest_dir):
+def test_already_exists_file_is_ready_with_auto_rename(qapp, dest_dir):
     (dest_dir / "a.zip").write_bytes(b"existing data")
     dialog = _build_dialog([_view("a.zip")], dest_dir)
     ready, text, kind = dialog._evaluate(dialog._entries[0])
-    assert ready is False
-    assert kind == "already_exists"
-    assert "Already exists" in text
+    assert ready is True
+    assert kind == "ready"
+    assert "Auto rename" in text
 
 
-def test_download_button_disabled_when_none_ready(qapp, dest_dir):
+def test_download_button_enabled_when_auto_rename(qapp, dest_dir):
     (dest_dir / "a.zip").write_bytes(b"existing data")
     dialog = _build_dialog([_view("a.zip")], dest_dir)
     dialog._refresh_summary()
-    assert dialog._download_btn.isEnabled() is False
+    assert dialog._download_btn.isEnabled() is True
 
 
 def test_download_button_enabled_when_at_least_one_ready(qapp, dest_dir):

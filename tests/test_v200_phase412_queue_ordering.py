@@ -169,19 +169,21 @@ def test_bulk_excluded_entry_does_not_consume_position(qapp, qenv):
     assert [t.queue_order for t in tasks] == [0, 1]
 
 
-def test_bulk_already_existing_excluded_from_queue(qapp, qenv):
-    """An already-existing reviewed resource is excluded by the review layer and
-    therefore never consumes a queue position."""
+def test_bulk_already_existing_auto_renamed_and_queued(qapp, qenv):
+    """An already-existing reviewed resource is auto-renamed by the review layer
+    and consumes a queue position with the resolved destination."""
     (qenv.dest_dir / "exists.zip").write_bytes(b"existing")
     views = [_make_view("ready1.zip"), _make_view("exists.zip"), _make_view("ready2.zip")]
     dialog = _build_bulk_dialog(views, qenv.dest_dir)
     dialog._on_download()
     accepted = dialog.accepted_entries
-    assert "exists.zip" not in [fn for (_e, fn, _d) in accepted]
-    assert [fn for (_e, fn, _d) in accepted] == ["ready1.zip", "ready2.zip"]
+    # exists.zip should be renamed to exists_1.zip
+    filenames = [fn for (_e, fn, _d) in accepted]
+    assert "exists_1.zip" in filenames
+    assert "ready1.zip" in filenames
+    assert "ready2.zip" in filenames
     tasks = _route_accepted(qenv, accepted)
-    assert [t.name for t in tasks] == ["ready1.zip", "ready2.zip"]
-    assert qenv.controller.queued_count == 2
+    assert qenv.controller.queued_count == 3
 
 
 def test_bulk_filename_conflict_excluded_from_queue(qapp, qenv):

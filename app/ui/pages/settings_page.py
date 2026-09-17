@@ -100,6 +100,15 @@ class SettingsPage(QWidget):
         self._concurrent_spin.valueChanged.connect(self._on_concurrent_changed)
         layout.addLayout(self._labeled_row("Maximum Concurrent Downloads", self._concurrent_spin))
 
+        self._conflict_combo = QComboBox()
+        self._conflict_combo.setFixedHeight(28)
+        self._conflict_combo.setMinimumWidth(150)
+        self._conflict_combo.addItems(["Auto Rename", "Rename"])
+        current_policy = self._settings.conflict_policy()
+        self._conflict_combo.setCurrentText("Auto Rename" if current_policy == "auto_rename" else "Rename")
+        self._conflict_combo.currentTextChanged.connect(self._on_conflict_policy_changed)
+        layout.addLayout(self._labeled_row("If File Exists", self._conflict_combo))
+
         self._speed_limit_check = QCheckBox("Enable speed limit")
         self._speed_limit_check.setChecked(self._settings.get_bool("speed_limit_enabled"))
         self._speed_limit_check.toggled.connect(self._on_speed_limit_toggled)
@@ -247,6 +256,12 @@ class SettingsPage(QWidget):
     def _on_speed_limit_changed(self, value: int):
         self._settings.set("speed_limit_value", value)
         self.settings_changed.emit("speed_limit_value", str(value))
+
+    def _on_conflict_policy_changed(self, text: str):
+        policy = "auto_rename" if text == "Auto Rename" else "rename"
+        self._settings.set("conflict_policy", policy)
+        self.settings_changed.emit("conflict_policy", policy)
+        log.info("Conflict policy set to: %s", policy)
 
     def _on_theme_changed(self, text: str):
         theme = text.lower()

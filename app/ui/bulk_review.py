@@ -23,6 +23,7 @@ from typing import Optional
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -64,6 +65,7 @@ class _ReviewEntry:
         self.filename_edit: Optional[QLineEdit] = None
         self.include_cb: Optional[QCheckBox] = None
         self.status_label: Optional[QLabel] = None
+        self.resolved_dest_display: Optional[QLabel] = None
 
         self.proposed_filename: str = sanitize_filename(view.file.name)
         self.category_label: str = ""
@@ -89,6 +91,7 @@ class BulkReviewDialog(QDialog):
         file_manager: FileManager,
         download_dir: str | Path | None = None,
         workflow: DownloadWorkflowService | None = None,
+        conflict_policy: str | None = None,
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
@@ -99,6 +102,7 @@ class BulkReviewDialog(QDialog):
         self._file_manager = file_manager
         self._workflow = workflow or DownloadWorkflowService(file_manager)
         self._download_dir = Path(download_dir) if download_dir else file_manager.default_dir
+        self._conflict_policy = conflict_policy or "auto_rename"
 
         self._entries: list[_ReviewEntry] = [_ReviewEntry(v) for v in resource_views]
         self.accepted_entries: list[tuple[_ReviewEntry, str, Path]] = []
@@ -175,9 +179,20 @@ class BulkReviewDialog(QDialog):
         change_btn.setFixedSize(120, 32)
         change_btn.clicked.connect(self._on_change_folder)
 
+        # Conflict policy selector
+        self._conflict_combo = QComboBox()
+        self._conflict_combo.setFixedHeight(32)
+        self._conflict_combo.setMinimumWidth(140)
+        self._conflict_combo.addItems(["Auto Rename", "Rename"])
+        current_policy = "Auto Rename" if self._conflict_policy == "auto_rename" else "Rename"
+        self._conflict_combo.setCurrentText(current_policy)
+        self._conflict_combo.currentTextChanged.connect(self._on_conflict_policy_changed)
+
         row.addWidget(QLabel("Destination:"), stretch=0)
         row.addWidget(self._dest_display, stretch=1)
         row.addWidget(change_btn)
+        row.addWidget(QLabel("If File Exists:"), stretch=0)
+        row.addWidget(self._conflict_combo)
         return frame
 
     def _populate_categories(self):
@@ -235,6 +250,13 @@ class BulkReviewDialog(QDialog):
         layout.addWidget(status_label, alignment=Qt.AlignVCenter)
         entry.status_label = status_label
 
+        # Resolved destination preview (shown when RENAME is selected and ALREADY_EXISTS)
+        resolved_label = QLabel()
+        resolved_label.setStyleSheet("font-size: 11px; color: #8A8A9A;")
+        resolved_label.hide()
+        layout.addWidget(resolved_label, alignment=Qt.AlignVCenter)
+        entry.resolved_dest_display = resolved_label
+
         return frame
 
     # ── Evaluation (reuses DownloadWorkflowService) ──────────────────────
@@ -263,7 +285,10 @@ class BulkReviewDialog(QDialog):
             return True, _STATE_LABEL["ready"], "ready"
         if dup.state == DuplicateState.ALREADY_EXISTS:
             detail = dup.detail or "File already exists at destination"
-            return False, f"{_STATE_LABEL['already_exists']} — {detail}", "already_exists"
+            # Both AUTO_RENAME and RENAME resolve to unique path and allow
+            if self._conflict_policy == "rename":
+                return True, f"{_STATE_LABEL['already_exists']} → Will rename", "ready"
+            return True, f"{_STATE_LABEL['already_exists']} → Auto rename", "ready"
         detail = dup.detail or ""
         label = duplicate_state_label(dup.state)
         text = f"{label} — {detail}" if detail else label
@@ -286,6 +311,24 @@ class BulkReviewDialog(QDialog):
             entry.status_label.setText(text)
             entry.status_label.setStyleSheet(_STATE_STYLE.get(kind, _STATE_STYLE["attention"]))
 
+            # Show resolved destination preview for ALREADY_EXISTS (both policies)
+            dup = self._workflow.check_duplicate(
+                entry.file,
+                sanitize_filename(entry.filename_edit.text()) or entry.filename_edit.text(),
+                self._download_dir
+            )
+            if dup.state == DuplicateState.ALREADY_EXISTS:
+                safe_name = sanitize_filename(entry.filename_edit.text())
+                unique_path = self._file_manager.get_unique_path(safe_name, self._download_dir)
+                entry.resolved_dest_display.setText(f"→ {unique_path.name}")
+                # Show preview for RENAME (explicit), hide for AUTO_RENAME (silent)
+                if self._conflict_policy == "rename":
+                    entry.resolved_dest_display.show()
+                else:
+                    entry.resolved_dest_display.hide()
+            else:
+                entry.resolved_dest_display.hide()
+
     def _on_filename_edited(self, entry: _ReviewEntry):
         self._recalc_all()
         self._refresh_summary()
@@ -307,6 +350,11 @@ class BulkReviewDialog(QDialog):
             self._recalc_all()
             self._refresh_summary()
 
+    def _on_conflict_policy_changed(self, text: str):
+        self._conflict_policy = "auto_rename" if text == "Auto Rename" else "rename"
+        self._recalc_all()
+        self._refresh_summary()
+
     def _ready_count(self) -> int:
         return sum(1 for e in self._entries if self._evaluate(e)[0])
 
@@ -320,6 +368,8 @@ class BulkReviewDialog(QDialog):
 
     def _on_download(self):
         accepted: list[tuple[_ReviewEntry, str, Path]] = []
+        # Track resolved names to handle intra-bulk collisions for AUTO_RENAME/RENAME
+        resolved_names: dict[str, int] = {}
         for entry in self._entries:
             if not entry.include_cb.isChecked():
                 continue
@@ -329,7 +379,34 @@ class BulkReviewDialog(QDialog):
             reviewed_filename = sanitize_filename(entry.filename_edit.text())
             if not reviewed_filename:
                 continue
-            accepted.append((entry, reviewed_filename, self._download_dir))
+
+            # Resolve destination for ALREADY_EXISTS (both AUTO_RENAME and RENAME)
+            dup = self._workflow.check_duplicate(entry.file, reviewed_filename, self._download_dir)
+            if dup.state == DuplicateState.ALREADY_EXISTS:
+                # Use get_unique_path for the base resolution, then handle intra-bulk collisions
+                base_unique = self._file_manager.get_unique_path(reviewed_filename, self._download_dir)
+                base_name = base_unique.name
+                # Check for intra-bulk collision and increment if needed
+                counter = resolved_names.get(base_name, 0)
+                if counter > 0:
+                    stem = base_unique.stem
+                    suffix = base_unique.suffix
+                    # Extract the current counter from stem if it ends with _N
+                    import re
+                    match = re.match(r'^(.+)_(\d+)$', stem)
+                    if match:
+                        base_stem = match.group(1)
+                        new_stem = f"{base_stem}_{counter}"
+                    else:
+                        new_stem = f"{stem}_{counter}"
+                    final_name = f"{new_stem}{suffix}"
+                    final_path = base_unique.parent / final_name
+                else:
+                    final_path = base_unique
+                resolved_names[base_name] = counter + 1
+                accepted.append((entry, final_path.name, final_path.parent))
+            else:
+                accepted.append((entry, reviewed_filename, self._download_dir))
 
         self.accepted_entries = accepted
         self.accept()
