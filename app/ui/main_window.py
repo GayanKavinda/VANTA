@@ -81,6 +81,8 @@ class MainWindow(QMainWindow):
             self._download_service,
         )
 
+        self.history_page.set_queue_controller(self._queue_controller)
+
         self.settings_page.set_services(
             self._app_state.download_manager,
             self._app_state.file_manager,

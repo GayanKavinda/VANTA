@@ -299,51 +299,77 @@ def save_download_task(task: DownloadTask):
         session.close()
 
 
+def _record_to_task(r: DownloadRecord) -> DownloadTask:
+    """Convert a ``DownloadRecord`` row into a core ``DownloadTask``."""
+    try:
+        status = TaskStatus(r.status)
+    except ValueError:
+        status = TaskStatus.QUEUED
+
+    try:
+        error_type = (
+            DownloadErrorType(r.error_type)
+            if r.error_type
+            else DownloadErrorType.UNKNOWN
+        )
+    except ValueError:
+        error_type = DownloadErrorType.UNKNOWN
+
+    return DownloadTask(
+        id=r.id,
+        name=r.name,
+        source_url=r.source_url,
+        download_url=r.download_url or "",
+        destination=r.destination or "",
+        status=status,
+        total_size=r.total_size,
+        downloaded_size=r.downloaded_size,
+        speed=r.speed,
+        progress=r.progress,
+        created_at=r.created_at,
+        updated_at=r.updated_at,
+        error=r.error,
+        error_type=error_type,
+        supports_resume=bool(r.supports_resume),
+        queue_order=(
+            r.queue_order
+            if r.queue_order is not None
+            else _UNORDERED_QUEUE_ORDER
+        ),
+    )
+
+
 def load_download_tasks() -> list[DownloadTask]:
     _migrate_downloads_table()
     session = get_session()
     try:
         records = session.query(DownloadRecord).all()
-        tasks = []
-        for r in records:
-            try:
-                status = TaskStatus(r.status)
-            except ValueError:
-                status = TaskStatus.QUEUED
+        return [_record_to_task(r) for r in records]
+    finally:
+        session.close()
 
-            try:
-                error_type = (
-                    DownloadErrorType(r.error_type)
-                    if r.error_type
-                    else DownloadErrorType.UNKNOWN
-                )
-            except ValueError:
-                error_type = DownloadErrorType.UNKNOWN
 
-            task = DownloadTask(
-                id=r.id,
-                name=r.name,
-                source_url=r.source_url,
-                download_url=r.download_url or "",
-                destination=r.destination or "",
-                status=status,
-                total_size=r.total_size,
-                downloaded_size=r.downloaded_size,
-                speed=r.speed,
-                progress=r.progress,
-                created_at=r.created_at,
-                updated_at=r.updated_at,
-                error=r.error,
-                error_type=error_type,
-                supports_resume=bool(r.supports_resume),
-                queue_order=(
-                    r.queue_order
-                    if r.queue_order is not None
-                    else _UNORDERED_QUEUE_ORDER
-                ),
-            )
-            tasks.append(task)
-        return tasks
+def load_history_tasks() -> list[DownloadTask]:
+    """Load terminal (completed, failed, cancelled) tasks for history display.
+
+    Ordered by most-recently-updated first, with task ID as a deterministic
+    tie-breaker so entries with equal timestamps have a stable ordering.
+    """
+    _migrate_downloads_table()
+    session = get_session()
+    try:
+        terminal_statuses = (
+            DownloadStatus.COMPLETED.value,
+            DownloadStatus.FAILED.value,
+            DownloadStatus.CANCELLED.value,
+        )
+        records = (
+            session.query(DownloadRecord)
+            .filter(DownloadRecord.status.in_(terminal_statuses))
+            .order_by(DownloadRecord.updated_at.desc(), DownloadRecord.id)
+            .all()
+        )
+        return [_record_to_task(r) for r in records]
     finally:
         session.close()
 
