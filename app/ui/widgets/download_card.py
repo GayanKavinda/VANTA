@@ -198,27 +198,38 @@ class DownloadCard(QFrame):
             self._remove_btn,
         ):
             self._button_row.removeWidget(button)
+            button.setVisible(False)
 
         # Details is always available regardless of state.
         self._button_row.addWidget(self._details_btn)
+        self._details_btn.setVisible(True)
 
         if task.status == TaskStatus.QUEUED:
             self._button_row.addWidget(self._cancel_btn)
+            self._cancel_btn.setVisible(True)
         elif task.status == TaskStatus.DOWNLOADING:
             self._button_row.addWidget(self._pause_btn)
             self._button_row.addWidget(self._cancel_btn)
+            self._pause_btn.setVisible(True)
+            self._cancel_btn.setVisible(True)
         elif task.status == TaskStatus.PAUSED:
             self._button_row.addWidget(self._resume_btn)
             self._button_row.addWidget(self._cancel_btn)
+            self._resume_btn.setVisible(True)
+            self._cancel_btn.setVisible(True)
         elif task.status in (TaskStatus.PREPARING, TaskStatus.VERIFYING):
             self._button_row.addWidget(self._cancel_btn)
+            self._cancel_btn.setVisible(True)
         elif task.status == TaskStatus.FAILED:
             self._button_row.addWidget(self._retry_btn)
-            self._button_row.addWidget(self._cancel_btn)
+            self._retry_btn.setVisible(True)
         elif task.status == TaskStatus.COMPLETED:
             self._button_row.addWidget(self._open_file_btn)
             self._button_row.addWidget(self._open_btn)
             self._button_row.addWidget(self._remove_btn)
+            self._open_file_btn.setVisible(True)
+            self._open_btn.setVisible(True)
+            self._remove_btn.setVisible(True)
 
     def _get_status_text(self, task: DownloadTask) -> str:
         if task.status == TaskStatus.QUEUED:
