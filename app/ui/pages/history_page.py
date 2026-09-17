@@ -97,6 +97,9 @@ class HistoryPage(QWidget):
         updates on in-flight downloads do not.
         """
         if task is not None and not task.is_terminal:
+            if task.id in self._cards:
+                self._tasks = [t for t in self._tasks if t.id != task.id]
+                self._render(self._tasks)
             return
         QTimer.singleShot(0, self._load_history)
 

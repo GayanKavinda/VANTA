@@ -515,6 +515,107 @@ class TestHistoryFileActions:
 class TestHistoryRetry:
     """Verify retry delegates to the public queue controller API."""
 
+    def test_failed_item_disappears_when_retry_leaves_terminal_state(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        manager, controller, _, _ = _env(tmp_path, max_concurrent=0)
+        task = _task(tmp_path, "hp_retry_sync", status=TaskStatus.FAILED)
+        manager.register_task(task)
+        save_download_task(task)
+        try:
+            page = HistoryPage()
+            page.set_queue_controller(controller)
+            QTest.qWait(10)
+            assert task.id in page._cards
+
+            def retry(task_id):
+                assert task_id == task.id
+                task.status = TaskStatus.QUEUED
+                page._on_queue_changed(task)
+
+            monkeypatch.setattr(controller, "retry_download", retry)
+            page._cards[task.id]._retry_btn.click()
+            QTest.qWait(10)
+
+            assert task.id not in page._cards
+            assert all(item.id != task.id for item in page._tasks)
+        finally:
+            _cleanup([task.id])
+
+    def test_retried_task_is_absent_while_queued(self, qapp, tmp_path):
+        manager, controller, _, _ = _env(tmp_path, max_concurrent=0)
+        task = _task(tmp_path, "hp_retry_queued", status=TaskStatus.FAILED)
+        manager.register_task(task)
+        save_download_task(task)
+        try:
+            page = HistoryPage()
+            page.set_queue_controller(controller)
+            QTest.qWait(10)
+            task.status = TaskStatus.QUEUED
+            page._on_queue_changed(task)
+            QTest.qWait(10)
+
+            assert task.id not in page._cards
+            assert task.id not in {item.id for item in page._tasks}
+        finally:
+            _cleanup([task.id])
+
+    def test_retried_task_returns_once_after_completion(
+        self, qapp, tmp_path
+    ):
+        manager, controller, _, _ = _env(tmp_path, max_concurrent=0)
+        persistence = PersistenceService()
+        task = _task(tmp_path, "hp_retry_complete", status=TaskStatus.FAILED)
+        manager.register_task(task)
+        save_download_task(task)
+        persistence.subscribe_to(manager)
+        try:
+            page = HistoryPage()
+            page.set_queue_controller(controller)
+            QTest.qWait(10)
+            task.status = TaskStatus.QUEUED
+            manager._emit_progress(task)
+            QTest.qWait(10)
+            assert task.id not in page._cards
+
+            task.status = TaskStatus.COMPLETED
+            manager._emit_progress(task)
+            QTest.qWait(20)
+
+            assert list(page._cards).count(task.id) == 1
+            assert len([item for item in page._tasks if item.id == task.id]) == 1
+        finally:
+            _cleanup([task.id])
+
+    def test_retried_completed_task_stays_single_after_refreshes(
+        self, qapp, tmp_path
+    ):
+        manager, controller, _, _ = _env(tmp_path, max_concurrent=0)
+        persistence = PersistenceService()
+        task = _task(tmp_path, "hp_retry_refresh", status=TaskStatus.FAILED)
+        manager.register_task(task)
+        save_download_task(task)
+        persistence.subscribe_to(manager)
+        try:
+            page = HistoryPage()
+            page.set_queue_controller(controller)
+            QTest.qWait(10)
+            task.status = TaskStatus.QUEUED
+            manager._emit_progress(task)
+            task.status = TaskStatus.COMPLETED
+            manager._emit_progress(task)
+            QTest.qWait(20)
+
+            for _ in range(3):
+                page._on_queue_changed(task)
+                page.refresh()
+                QTest.qWait(10)
+
+            assert task.id in page._cards
+            assert len([item for item in page._tasks if item.id == task.id]) == 1
+        finally:
+            _cleanup([task.id])
+
     def test_retry_delegates_to_controller(self, qapp, tmp_path, monkeypatch):
         manager, controller, _, _ = _env(tmp_path, max_concurrent=0)
         task = _task(
