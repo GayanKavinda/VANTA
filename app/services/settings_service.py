@@ -80,6 +80,40 @@ class SettingsService:
     def conflict_policy(self) -> str:
         return self.get("conflict_policy", "auto_rename")
 
+    def defaults(self) -> dict[str, str]:
+        """Return a copy of the known default settings."""
+        return dict(DEFAULTS)
+
+    def reset_to_defaults(self) -> dict[str, str]:
+        """Persist every known setting back to its default value.
+
+        Affects only the ``settings`` table. It never touches download
+        records, history, scheduled tasks, or on-disk download files. The
+        internal cache is refreshed consistently so subsequent ``get``
+        calls observe the reset values without a re-read.
+        """
+        restored = self.defaults()
+        for key, value in restored.items():
+            self._cache[key] = str(value)
+
+        session = get_session()
+        try:
+            for key, value in restored.items():
+                record = session.get(SettingRecord, key)
+                if record:
+                    record.value = str(value)
+                else:
+                    session.add(SettingRecord(key=key, value=str(value)))
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+        log.info("Settings reset to defaults: %s", ", ".join(sorted(restored)))
+        return restored
+
     def speed_limit_bytes_per_sec(self) -> int:
         """Return the configured download speed limit in bytes/sec.
 

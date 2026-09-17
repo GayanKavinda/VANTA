@@ -26,6 +26,7 @@ from app.ui.pages.home_page import HomePage
 from app.ui.pages.downloads_page import DownloadsPage
 from app.ui.pages.history_page import HistoryPage
 from app.ui.pages.settings_page import SettingsPage
+from app.ui.theme import ThemeService
 from app.ui.widgets.sidebar import Sidebar
 from app.utils.logger import get_logger
 
@@ -52,6 +53,7 @@ class MainWindow(QMainWindow):
         )
         self._persistence = PersistenceService()
         self._scheduling = SchedulingService(self._queue_controller)
+        self._theme = ThemeService(self._settings)
 
         # V2.0 Phase 2 - workflow service for duplicate detection/validation.
         self._workflow = DownloadWorkflowService(self._app_state.file_manager)
@@ -60,6 +62,7 @@ class MainWindow(QMainWindow):
         self._connect_signals()
         self._init_services()
         self._restore_tasks()
+        self._theme.apply()
 
     def _build_ui(self):
         container = QWidget()
@@ -176,12 +179,27 @@ class MainWindow(QMainWindow):
         log.info("Setting changed: %s = %s", key, value)
         if key == "max_concurrent":
             self._queue_controller.set_max_concurrent(int(value))
+        elif key == "download_dir":
+            from pathlib import Path
+
+            self._app_state.file_manager.set_default_dir(Path(value))
+        elif key == "theme":
+            self._theme.apply(value)
         elif key in ("speed_limit_enabled", "speed_limit_value"):
             # The speed limit is PER DOWNLOAD. speed_limit_bytes_per_sec()
             # returns 0 (unlimited) when disabled or zero, otherwise the
             # per-download MB/s value converted to bytes/sec.
             self._app_state.download_manager.set_speed_limit(
                 self._settings.speed_limit_bytes_per_sec()
+            )
+        elif key in ("launch_on_startup", "check_for_updates"):
+            # These preferences are persisted for compatibility but have no
+            # runtime infrastructure behind them in this phase. The stored
+            # value is honored on disk; no action is taken.
+            log.info(
+                "Dormant setting %s updated to %s (no runtime action in Phase 4.10)",
+                key,
+                value,
             )
 
     async def _analyze_only(self, url: str):
