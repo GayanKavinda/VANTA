@@ -79,3 +79,22 @@ class SettingsService:
 
     def conflict_policy(self) -> str:
         return self.get("conflict_policy", "auto_rename")
+
+    def speed_limit_bytes_per_sec(self) -> int:
+        """Return the configured download speed limit in bytes/sec.
+
+        The limit is PER ACTIVE DOWNLOAD, not an application-wide aggregate
+        cap. Each concurrent download independently enforces this rate, so
+        N concurrent downloads may collectively approach N * limit bytes/sec.
+
+        Returns 0 (unlimited) when the limit is disabled, unset, or zero.
+        The UI stores ``speed_limit_value`` as MB/s and this method performs
+        the MB/s -> bytes/sec conversion so callers reach DownloadManager
+        with a ready-to-use rate.
+        """
+        if not self.get_bool("speed_limit_enabled"):
+            return 0
+        value = self.get_int("speed_limit_value", 0)
+        if value <= 0:
+            return 0
+        return value * 1024 * 1024

@@ -660,6 +660,14 @@ class DownloadManager:
         self._semaphore = asyncio.Semaphore(value)
 
     def set_speed_limit(self, bytes_per_sec: int):
+        """Set the per-download speed cap in bytes/sec.
+
+        This caps EACH active download individually (applied inside
+        ``_stream_to_file`` on every streamed chunk), not an application-wide
+        aggregate. Concurrent downloads each enforce this value, so the total
+        observed throughput may approach ``max_concurrent * bytes_per_sec``.
+        A value of 0 (the default) disables throttling (unlimited).
+        """
         self._speed_limit_bytes_per_sec = max(0, bytes_per_sec)
 
     def get_incomplete_downloads(self) -> list[DownloadTask]:

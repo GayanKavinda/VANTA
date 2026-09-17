@@ -109,9 +109,19 @@ class SettingsPage(QWidget):
         self._conflict_combo.currentTextChanged.connect(self._on_conflict_policy_changed)
         layout.addLayout(self._labeled_row("If File Exists", self._conflict_combo))
 
-        self._speed_limit_check = QCheckBox("Enable speed limit")
+        self._speed_limit_check = QCheckBox("Limit download speed")
         self._speed_limit_check.setChecked(self._settings.get_bool("speed_limit_enabled"))
         self._speed_limit_check.toggled.connect(self._on_speed_limit_toggled)
+
+        self._speed_limit_note = QLabel(
+            "Limits the speed of each active download individually. "
+            "Several downloads running at the same time each respect this limit."
+        )
+        self._speed_limit_note.setStyleSheet(
+            "font-size: 12px; color: #8A8A9A;"
+        )
+        self._speed_limit_note.setWordWrap(True)
+        self._speed_limit_note.setEnabled(self._speed_limit_check.isChecked())
 
         self._speed_limit_spin = QSpinBox()
         self._speed_limit_spin.setRange(1, 1000)
@@ -121,10 +131,18 @@ class SettingsPage(QWidget):
         self._speed_limit_check.toggled.connect(
             lambda checked: self._speed_limit_spin.setEnabled(checked)
         )
+        self._speed_limit_check.toggled.connect(
+            lambda checked: self._speed_limit_note.setEnabled(checked)
+        )
         self._speed_limit_spin.valueChanged.connect(self._on_speed_limit_changed)
 
+        spinedit_row = self._labeled_row(
+            "Maximum speed per download:", self._speed_limit_spin
+        )
+
         layout.addWidget(self._speed_limit_check)
-        layout.addWidget(self._speed_limit_spin)
+        layout.addWidget(self._speed_limit_note)
+        layout.addLayout(spinedit_row)
 
         group.layout().addLayout(layout)
         return group

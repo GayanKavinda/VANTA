@@ -115,10 +115,11 @@ class MainWindow(QMainWindow):
         max_concurrent = self._settings.max_concurrent()
         self._queue_controller.set_max_concurrent(max_concurrent)
 
-        speed_limit_enabled = self._settings.get_bool("speed_limit_enabled")
-        speed_limit_value = self._settings.get_int("speed_limit_value", 0)
-        if speed_limit_enabled and speed_limit_value > 0:
-            self._app_state.download_manager.set_speed_limit(speed_limit_value * 1024 * 1024)
+        # speed_limit_bytes_per_sec() returns 0 (unlimited) when disabled/zero,
+        # and otherwise the per-download MB/s value converted to bytes/sec.
+        self._app_state.download_manager.set_speed_limit(
+            self._settings.speed_limit_bytes_per_sec()
+        )
 
         self._persistence.subscribe_to(self._app_state.download_manager)
 
@@ -172,16 +173,13 @@ class MainWindow(QMainWindow):
         log.info("Setting changed: %s = %s", key, value)
         if key == "max_concurrent":
             self._queue_controller.set_max_concurrent(int(value))
-        elif key == "speed_limit_enabled":
-            enabled = value.lower() in ("true", "1", "yes")
-            speed_limit_value = self._settings.get_int("speed_limit_value", 0)
-            if enabled and speed_limit_value > 0:
-                self._app_state.download_manager.set_speed_limit(speed_limit_value * 1024 * 1024)
-            else:
-                self._app_state.download_manager.set_speed_limit(0)
-        elif key == "speed_limit_value":
-            if self._settings.get_bool("speed_limit_enabled"):
-                self._app_state.download_manager.set_speed_limit(int(value) * 1024 * 1024)
+        elif key in ("speed_limit_enabled", "speed_limit_value"):
+            # The speed limit is PER DOWNLOAD. speed_limit_bytes_per_sec()
+            # returns 0 (unlimited) when disabled or zero, otherwise the
+            # per-download MB/s value converted to bytes/sec.
+            self._app_state.download_manager.set_speed_limit(
+                self._settings.speed_limit_bytes_per_sec()
+            )
 
     async def _analyze_only(self, url: str):
         try:
