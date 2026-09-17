@@ -115,8 +115,6 @@ class DownloadsPage(QWidget):
             return
 
         if task.id not in self._cards:
-            if task.is_terminal and task.status == TaskStatus.COMPLETED:
-                return
             card = DownloadCard(task)
             card.pause_requested.connect(self._on_pause_clicked)
             card.resume_requested.connect(self._on_resume_clicked)

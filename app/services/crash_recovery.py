@@ -341,7 +341,7 @@ class CrashRecovery:
         # Sort queued tasks by queue_order to preserve queue order
         queued_tasks = sorted(
             [t for t in tasks if t.status == TaskStatus.QUEUED],
-            key=lambda t: (t.queue_order if t.queue_order > 0 else 999999, t.created_at)
+            key=lambda t: (t.queue_order, t.created_at)
         )
         
         # Separate other task types

@@ -12,6 +12,8 @@ from app.utils.logger import get_logger
 
 log = get_logger("vanta.database.repositories")
 
+_UNORDERED_QUEUE_ORDER = 2**31 - 1
+
 
 class DatabaseConsistencyIssue(str, Enum):
     """Types of consistency issues detected."""
@@ -164,7 +166,11 @@ def validate_database() -> ValidationReport:
                 error=r.error,
                 error_type=error_type,
                 supports_resume=bool(r.supports_resume),
-                queue_order=r.queue_order or 0,
+                queue_order=(
+                    r.queue_order
+                    if r.queue_order is not None
+                    else _UNORDERED_QUEUE_ORDER
+                ),
             )
 
             if _validate_task(task, report):
@@ -267,7 +273,7 @@ def save_download_task(task: DownloadTask):
             record.error = task.error
             record.error_type = task.error_type.value if task.error_type else None
             record.supports_resume = int(task.supports_resume)
-            record.queue_order = task.queue_order or None
+            record.queue_order = task.queue_order
         else:
             record = DownloadRecord(
                 id=task.id,
@@ -285,7 +291,7 @@ def save_download_task(task: DownloadTask):
                 error=task.error,
                 error_type=task.error_type.value if task.error_type else None,
                 supports_resume=int(task.supports_resume),
-                queue_order=task.queue_order or None,
+                queue_order=task.queue_order,
             )
             session.add(record)
         session.commit()
@@ -330,7 +336,11 @@ def load_download_tasks() -> list[DownloadTask]:
                 error=r.error,
                 error_type=error_type,
                 supports_resume=bool(r.supports_resume),
-                queue_order=r.queue_order or 0,
+                queue_order=(
+                    r.queue_order
+                    if r.queue_order is not None
+                    else _UNORDERED_QUEUE_ORDER
+                ),
             )
             tasks.append(task)
         return tasks
