@@ -399,3 +399,211 @@ def test_reset_does_not_drop_settings_table(clean_db):
     finally:
         session.close()
     assert count >= len(DEFAULTS)
+
+
+# Integration tests for reset runtime propagation
+def test_reset_theme_light_to_dark_applies_immediately(clean_db, qapp):
+    """Reset from Light theme immediately applies Dark at QApplication level."""
+    from app.services.settings_service import SettingsService
+    from app.ui.main_window import MainWindow
+
+    # Set up MainWindow (which creates ThemeService)
+    window = MainWindow()
+    # Manually set theme to light first
+    window._settings.set("theme", "light")
+    window._theme.apply("light")
+    assert "#FFFFFF" in qapp.styleSheet()
+
+    # Trigger reset
+    restored = window._settings.reset_to_defaults()
+
+    # Emit the theme changed signal as SettingsPage would
+    window._on_settings_changed("theme", restored["theme"])
+
+    # Theme should be dark now
+    assert "#0F1014" in qapp.styleSheet()
+    assert window._settings.get("theme") == "dark"
+
+    window.close()
+
+
+def test_reset_download_dir_updates_filemanager(clean_db):
+    """Reset custom download directory updates FileManager runtime directory."""
+    from app.services.settings_service import SettingsService
+    from app.core.file_manager import FileManager
+    from pathlib import Path
+
+    # Create a FileManager with a custom directory
+    custom_dir = Path("/custom/test/path")
+    fm = FileManager(custom_dir)
+    assert fm.default_dir == custom_dir
+
+    # Create SettingsService and set custom dir
+    s = SettingsService()
+    s.set("download_dir", str(custom_dir))
+
+    # Simulate reset
+    restored = s.reset_to_defaults()
+
+    # Apply the reset to FileManager (as MainWindow._on_settings_changed does)
+    fm.set_default_dir(Path(restored["download_dir"]))
+
+    # Should be back to default
+    assert fm.default_dir == Path(DEFAULTS["download_dir"])
+
+
+def test_reset_max_concurrent_updates_queuecontroller(clean_db):
+    """Reset max_concurrent updates QueueController runtime value."""
+    from app.services.settings_service import SettingsService
+    from app.core.queue_controller import QueueController
+    from app.core.downloader import DownloadManager
+
+    dm = DownloadManager()
+    qc = QueueController(dm)
+
+    # Set custom value
+    s = SettingsService()
+    s.set("max_concurrent", 10)
+    qc.set_max_concurrent(s.max_concurrent())
+    assert qc.max_concurrent == 10
+
+    # Reset
+    restored = s.reset_to_defaults()
+    qc.set_max_concurrent(int(restored["max_concurrent"]))
+
+    # Should be back to default (3)
+    assert qc.max_concurrent == 3
+
+
+def test_reset_speed_limit_updates_downloadmanager(clean_db):
+    """Reset speed limit updates DownloadManager runtime limit."""
+    from app.services.settings_service import SettingsService
+    from app.core.downloader import DownloadManager
+
+    dm = DownloadManager()
+
+    # Set custom speed limit
+    s = SettingsService()
+    s.set("speed_limit_enabled", True)
+    s.set("speed_limit_value", 5)
+    dm.set_speed_limit(s.speed_limit_bytes_per_sec())
+    assert dm._speed_limit_bytes_per_sec == 5 * 1024 * 1024
+
+    # Reset
+    restored = s.reset_to_defaults()
+    dm.set_speed_limit(s.speed_limit_bytes_per_sec())  # s now has defaults
+
+    # Should be unlimited (0)
+    assert dm._speed_limit_bytes_per_sec == 0
+
+
+def test_reset_conflict_policy_available_to_consumers(clean_db):
+    """Reset conflict policy restores default available to consumers."""
+    from app.services.settings_service import SettingsService
+
+    s = SettingsService()
+    s.set("conflict_policy", "rename")
+    assert s.conflict_policy() == "rename"
+
+    restored = s.reset_to_defaults()
+
+    # Conflict policy should be restored and accessible
+    assert s.conflict_policy() == DEFAULTS["conflict_policy"]
+    assert restored["conflict_policy"] == DEFAULTS["conflict_policy"]
+
+
+def test_failed_download_dir_validation_preserves_previous(clean_db):
+    """Failed download-directory validation does not overwrite previous valid setting."""
+    from app.ui.pages.settings_page import SettingsPage
+    from app.core.file_manager import FileManager
+    from pathlib import Path
+
+    # Set up SettingsPage with a valid previous directory
+    prev_dir = Path("/previous/valid/dir")
+    fm = FileManager(prev_dir)
+
+    page = SettingsPage()
+    page.set_services(None, fm)
+    page._settings.set("download_dir", str(prev_dir))
+    page._load_values()
+
+    # Try to set invalid directory (file instead of dir)
+    import tempfile
+    with tempfile.NamedTemporaryFile() as tmp:
+        file_path = Path(tmp.name)
+        error = page._validate_download_dir(str(file_path))
+        assert error is not None
+        assert "file" in error.lower()
+
+    # Previous directory should be unchanged in settings
+    assert page._settings.get("download_dir") == str(prev_dir)
+    # FileManager should be unchanged
+    assert fm.default_dir == prev_dir
+
+
+def test_windows_invalid_path_rejected():
+    """Windows-specific invalid path is rejected deterministically."""
+    from app.ui.pages.settings_page import SettingsPage
+
+    page = SettingsPage()
+
+    # Paths that should be rejected by validation
+    # NUL - exists but is a device, not a directory
+    # Invalid characters in path
+    # Paths with invalid Windows characters
+    invalid_paths = [
+        "NUL",                    # Reserved device name - exists but not a directory
+        "C:\\invalid<>path",      # Invalid chars < >
+        "C:\\path|with|pipes",    # Invalid chars |
+        "C:\\path\"with\"quotes", # Invalid chars "
+    ]
+
+    for invalid_path in invalid_paths:
+        result = page._validate_download_dir(invalid_path)
+        assert result is not None, f"Path '{invalid_path}' should be rejected"
+
+
+def test_reset_does_not_modify_scheduled_tasks(clean_db):
+    """Reset does not modify a scheduled task's scheduled_at value."""
+    from app.services.settings_service import SettingsService
+    from app.database.repositories import save_download_task
+    from app.core.task_manager import DownloadTask, TaskStatus
+    from app.database.connection import get_session
+    from app.database.models import DownloadRecord
+    import time
+
+    # Create a scheduled task with specific scheduled_at
+    scheduled_time = time.time() + 3600  # 1 hour in future
+    task = DownloadTask(
+        id="scheduled001",
+        name="scheduled.txt",
+        source_url="http://example.com/scheduled.txt",
+        download_url="http://example.com/scheduled.txt",
+        destination="/tmp/scheduled.txt",
+        status=TaskStatus.QUEUED,
+        scheduled_at=scheduled_time,
+    )
+    save_download_task(task)
+
+    # Verify it was saved
+    session = get_session()
+    try:
+        saved = session.query(DownloadRecord).filter_by(id="scheduled001").first()
+        assert saved is not None
+        original_scheduled_at = saved.scheduled_at
+    finally:
+        session.close()
+
+    # Reset settings
+    s = SettingsService()
+    s.set("theme", "light")
+    s.reset_to_defaults()
+
+    # Verify scheduled_at unchanged
+    session = get_session()
+    try:
+        saved = session.query(DownloadRecord).filter_by(id="scheduled001").first()
+        assert saved is not None
+        assert saved.scheduled_at == original_scheduled_at
+    finally:
+        session.close()

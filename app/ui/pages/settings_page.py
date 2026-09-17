@@ -300,8 +300,8 @@ class SettingsPage(QWidget):
     def _validate_download_dir(path_str: str) -> str | None:
         """Return an error message if ``path_str`` is not a usable download dir.
 
-        Returns ``None`` when the path is acceptable. Performs no destructive
-        operations and creates no files.
+        Returns ``None`` when the path is acceptable. May create the directory
+        if it does not exist. Performs no destructive file operations.
         """
         if not path_str or not path_str.strip():
             return "No directory selected."
