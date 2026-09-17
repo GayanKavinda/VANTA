@@ -279,7 +279,7 @@ class DownloadReviewDialog(QDialog):
             return
         if self._duplicate_check.state == DuplicateState.ALREADY_EXISTS:
             # Both AUTO_RENAME and RENAME resolve to a unique safe destination
-            self._destination = self._resolved_destination
+            self._destination = self._resolved_destination.parent
             self._filename = self._resolved_destination.name
         self.accept()
 

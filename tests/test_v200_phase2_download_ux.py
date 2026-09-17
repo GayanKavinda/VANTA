@@ -346,8 +346,8 @@ def test_download_button_auto_renames_already_exists(tmp_path):
     dialog = DownloadReviewDialog(file=file, file_manager=app_state.file_manager, download_dir=dest, duplicate_check=dc, workflow=workflow, conflict_policy='auto_rename')
     dialog._on_download()
     assert dialog.result() == 1
-    # Destination should be resolved to unique path
-    assert dialog.destination.name == 'test_1.zip'
+    assert dialog.destination == dest
+    assert dialog.filename == 'test_1.zip'
 
 def test_download_button_rename_resolves_and_shows_preview(tmp_path):
     """RENAME policy should resolve conflict and accept with preview."""
@@ -366,7 +366,8 @@ def test_download_button_rename_resolves_and_shows_preview(tmp_path):
     dialog = DownloadReviewDialog(file=file, file_manager=app_state.file_manager, download_dir=dest, duplicate_check=dc, workflow=workflow, conflict_policy='rename')
     dialog._on_download()
     assert dialog.result() == 1
-    assert dialog.destination.name == 'test_1.zip'
+    assert dialog.destination == dest
+    assert dialog.filename == 'test_1.zip'
 
 def test_download_button_rejects_when_duplicate_resource(tmp_path):
     """DUPLICATE_RESOURCE should still reject regardless of policy."""

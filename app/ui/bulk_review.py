@@ -368,8 +368,7 @@ class BulkReviewDialog(QDialog):
 
     def _on_download(self):
         accepted: list[tuple[_ReviewEntry, str, Path]] = []
-        # Track resolved names to handle intra-bulk collisions for AUTO_RENAME/RENAME
-        resolved_names: dict[str, int] = {}
+        reserved_paths: set[Path] = set()
         for entry in self._entries:
             if not entry.include_cb.isChecked():
                 continue
@@ -383,33 +382,32 @@ class BulkReviewDialog(QDialog):
             # Resolve destination for ALREADY_EXISTS (both AUTO_RENAME and RENAME)
             dup = self._workflow.check_duplicate(entry.file, reviewed_filename, self._download_dir)
             if dup.state == DuplicateState.ALREADY_EXISTS:
-                # Use get_unique_path for the base resolution, then handle intra-bulk collisions
-                base_unique = self._file_manager.get_unique_path(reviewed_filename, self._download_dir)
-                base_name = base_unique.name
-                # Check for intra-bulk collision and increment if needed
-                counter = resolved_names.get(base_name, 0)
-                if counter > 0:
-                    stem = base_unique.stem
-                    suffix = base_unique.suffix
-                    # Extract the current counter from stem if it ends with _N
-                    import re
-                    match = re.match(r'^(.+)_(\d+)$', stem)
-                    if match:
-                        base_stem = match.group(1)
-                        new_stem = f"{base_stem}_{counter}"
-                    else:
-                        new_stem = f"{stem}_{counter}"
-                    final_name = f"{new_stem}{suffix}"
-                    final_path = base_unique.parent / final_name
-                else:
-                    final_path = base_unique
-                resolved_names[base_name] = counter + 1
+                final_path = self._file_manager.get_unique_path(
+                    reviewed_filename, self._download_dir
+                )
+                while final_path in reserved_paths:
+                    final_path = self._file_manager.get_unique_path(
+                        self._next_candidate_name(final_path), self._download_dir
+                    )
                 accepted.append((entry, final_path.name, final_path.parent))
             else:
+                final_path = self._download_dir / reviewed_filename
                 accepted.append((entry, reviewed_filename, self._download_dir))
+            reserved_paths.add(final_path)
 
         self.accepted_entries = accepted
         self.accept()
+
+    @staticmethod
+    def _next_candidate_name(path: Path) -> str:
+        stem = path.stem
+        suffix = path.suffix
+        prefix, separator, number = stem.rpartition("_")
+        if separator and number.isdigit():
+            stem = f"{prefix}_{int(number) + 1}"
+        else:
+            stem = f"{stem}_1"
+        return f"{stem}{suffix}"
 
 
 _STATE_LABEL = {
