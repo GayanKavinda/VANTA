@@ -18,6 +18,7 @@ from app.database.repositories import load_download_tasks
 from app.services.download_service import DownloadService
 from app.services.download_workflow import DownloadWorkflowService
 from app.services.persistence_service import PersistenceService
+from app.services.scheduling_service import SchedulingService
 from app.services.settings_service import SettingsService
 from app.ui.bulk_review import BulkReviewDialog
 from app.ui.download_review import DownloadReviewDialog
@@ -50,6 +51,7 @@ class MainWindow(QMainWindow):
             file_manager=self._app_state.file_manager,
         )
         self._persistence = PersistenceService()
+        self._scheduling = SchedulingService(self._queue_controller)
 
         # V2.0 Phase 2 - workflow service for duplicate detection/validation.
         self._workflow = DownloadWorkflowService(self._app_state.file_manager)
@@ -130,6 +132,7 @@ class MainWindow(QMainWindow):
         tasks = load_download_tasks()
 
         interrupted_tasks = self._queue_controller.restore_tasks(tasks)
+        self._scheduling.start()
         self.history_page.refresh()
 
         if interrupted_tasks:
@@ -256,6 +259,7 @@ class MainWindow(QMainWindow):
                     file=resource_view.file,
                     destination=dialog.destination,
                     filename=dialog.filename,
+                    scheduled_at=dialog.scheduled_at,
                 )
             else:
                 task = await self._download_service.start_file_download(
@@ -263,6 +267,7 @@ class MainWindow(QMainWindow):
                     file=resource_view.file,
                 )
             if task:
+                self._scheduling.track(task.id)
                 # Register the task so future duplicate checks see it.
                 self._workflow.register_selected(task)
                 self.stacked_widget.setCurrentIndex(1)
@@ -324,6 +329,8 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         # Graceful shutdown
         log.info("Application closing, initiating graceful shutdown...")
+
+        self._scheduling.stop()
 
         # Step 1: Stop new work and pause/cancel active downloads
         asyncio.run(self._app_state.download_manager.shutdown())

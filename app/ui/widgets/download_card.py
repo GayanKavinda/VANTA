@@ -1,3 +1,6 @@
+import time
+from datetime import datetime
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
@@ -233,6 +236,13 @@ class DownloadCard(QFrame):
 
     def _get_status_text(self, task: DownloadTask) -> str:
         if task.status == TaskStatus.QUEUED:
+            if task.scheduled_at is not None and task.scheduled_at > time.time():
+                starts_at = datetime.fromtimestamp(task.scheduled_at).strftime("%b %d, %Y %H:%M")
+                remaining = max(0, int(task.scheduled_at - time.time()))
+                minutes, seconds = divmod(remaining, 60)
+                hours, minutes = divmod(minutes, 60)
+                countdown = f"{hours}h {minutes}m" if hours else f"{minutes}m {seconds}s"
+                return f"Scheduled\nStarts at {starts_at}\nin {countdown}"
             if task.queue_position > 0:
                 return f"Queued\nPosition #{task.queue_position}\nWaiting for available slot"
             return "Queued\nWaiting for available slot"

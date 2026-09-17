@@ -13,6 +13,7 @@ Architecture:
 
 from __future__ import annotations
 
+import time
 from typing import Callable, Optional
 
 from app.core.downloader import DownloadManager
@@ -241,6 +242,7 @@ class QueueController:
         source_url: str,
         download_url: str,
         destination: str,
+        scheduled_at: float | None = None,
     ) -> DownloadTask:
         import uuid
         task = DownloadTask(
@@ -249,15 +251,29 @@ class QueueController:
             source_url=source_url,
             download_url=download_url,
             destination=destination,
+            scheduled_at=scheduled_at if scheduled_at and scheduled_at > time.time() else None,
         )
         # Assign queue_order before registering
         task.queue_order = self._next_queue_order_value()
 
         # Register the task without starting it - scheduler will handle promotion
         self._manager.register_task(task)
-        self._scheduler.on_task_added(task)
+        if task.scheduled_at is None:
+            self._scheduler.on_task_added(task)
         self._emit_queue_change(task)
         return task
+
+    def activate_scheduled_task(self, task_id: str) -> bool:
+        """Make one due scheduled task eligible for normal queue admission."""
+        task = self.find_task(task_id)
+        if task is None or task.is_terminal or task.status != TaskStatus.QUEUED:
+            return False
+        if task.scheduled_at is None or task.scheduled_at > time.time():
+            return False
+        task.scheduled_at = None
+        self._scheduler.on_task_added(task)
+        self._emit_queue_change(task)
+        return True
 
     def pause_download(self, task: DownloadTask):
         if task.is_terminal:
@@ -290,6 +306,7 @@ class QueueController:
     def cancel_download(self, task: DownloadTask):
         if task.is_terminal:
             return
+        task.scheduled_at = None
         self._manager.cancel_download(task)
         self._scheduler.on_task_status_changed(task, task.status)
         self._scheduler.on_task_removed(task.id)
@@ -475,7 +492,16 @@ class QueueController:
         interrupted = self._manager.restore_tasks(tasks)
         # Wake scheduler for any restored queued tasks
         for task in self._manager.download_tasks:
-            if task.status == TaskStatus.QUEUED and task.id not in self._scheduler._scheduled_tasks:
+            if (
+                task.status == TaskStatus.QUEUED
+                and task.scheduled_at is not None
+                and task.scheduled_at <= time.time()
+            ):
+                task.scheduled_at = None
+            if (
+                task.status == TaskStatus.QUEUED
+                and task.scheduled_at is None
+            ):
                 self._scheduler.on_task_added(task)
         self._emit_queue_change(None)
         return interrupted

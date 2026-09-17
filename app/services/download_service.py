@@ -71,6 +71,7 @@ class DownloadService:
         file: DownloadFile,
         destination: str | Path | None = None,
         filename: str | None = None,
+        scheduled_at: float | None = None,
     ) -> DownloadTask | None:
         from app.core.models import ResolvedResource
         if isinstance(file, ResolvedResource):
@@ -121,6 +122,7 @@ class DownloadService:
                 source_url=source_url,
                 download_url=file.url,
                 destination=str(dest_path),
+                scheduled_at=scheduled_at,
             )
         else:
             task = await self._download_manager.add_download(

@@ -53,6 +53,7 @@ class DownloadTask:
     error_type: DownloadErrorType = DownloadErrorType.UNKNOWN
     supports_resume: bool = False
     queue_order: int = 0
+    scheduled_at: float | None = None
 
     @property
     def is_active(self) -> bool:
@@ -171,4 +172,5 @@ class DownloadTask:
             "supports_resume": self.supports_resume,
             "queue_position": self.queue_position,
             "queue_order": self.queue_order,
+            "scheduled_at": self.scheduled_at,
         }

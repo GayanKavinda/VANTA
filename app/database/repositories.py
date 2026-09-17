@@ -67,6 +67,8 @@ def _migrate_downloads_table():
             pending.append("ALTER TABLE downloads ADD COLUMN error_type TEXT")
         if "queue_order" not in existing_columns:
             pending.append("ALTER TABLE downloads ADD COLUMN queue_order INTEGER")
+        if "scheduled_at" not in existing_columns:
+            pending.append("ALTER TABLE downloads ADD COLUMN scheduled_at FLOAT")
         for stmt in pending:
             conn.execute(text(stmt))
             conn.commit()
@@ -171,6 +173,7 @@ def validate_database() -> ValidationReport:
                     if r.queue_order is not None
                     else _UNORDERED_QUEUE_ORDER
                 ),
+                scheduled_at=r.scheduled_at,
             )
 
             if _validate_task(task, report):
@@ -274,6 +277,7 @@ def save_download_task(task: DownloadTask):
             record.error_type = task.error_type.value if task.error_type else None
             record.supports_resume = int(task.supports_resume)
             record.queue_order = task.queue_order
+            record.scheduled_at = task.scheduled_at
         else:
             record = DownloadRecord(
                 id=task.id,
@@ -292,6 +296,7 @@ def save_download_task(task: DownloadTask):
                 error_type=task.error_type.value if task.error_type else None,
                 supports_resume=int(task.supports_resume),
                 queue_order=task.queue_order,
+                scheduled_at=task.scheduled_at,
             )
             session.add(record)
         session.commit()
@@ -336,6 +341,7 @@ def _record_to_task(r: DownloadRecord) -> DownloadTask:
             if r.queue_order is not None
             else _UNORDERED_QUEUE_ORDER
         ),
+        scheduled_at=r.scheduled_at,
     )
 
 

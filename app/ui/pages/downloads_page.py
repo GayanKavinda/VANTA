@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QFrame,
@@ -30,6 +30,10 @@ class DownloadsPage(QWidget):
         self._cards: dict[str, DownloadCard] = {}
         self._queue_controller: QueueController | None = None
         self._download_service: DownloadService | None = None
+        self._schedule_timer = QTimer(self)
+        self._schedule_timer.setInterval(1000)
+        self._schedule_timer.timeout.connect(self._refresh_scheduled_cards)
+        self._schedule_timer.start()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(48, 48, 48, 48)
@@ -173,6 +177,19 @@ class DownloadsPage(QWidget):
             parts.append(f"{completed} Completed")
 
         self._summary.setText(" · ".join(parts) if parts else "No downloads")
+
+    def _refresh_scheduled_cards(self):
+        controller = self._queue_controller
+        if controller is None:
+            return
+        for task_id, card in list(self._cards.items()):
+            task = controller.find_task(task_id)
+            if task is not None and task.scheduled_at is not None:
+                card.update_from_task(task)
+
+    def closeEvent(self, event):
+        self._schedule_timer.stop()
+        super().closeEvent(event)
 
     def _on_pause_all(self):
         if self._queue_controller:

@@ -7,10 +7,14 @@ ResourceIntelligence output - does not modify the download engine.
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+import time
+
+from PySide6.QtCore import QDateTime, Qt
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
+    QCheckBox,
+    QDateTimeEdit,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
@@ -76,6 +80,8 @@ class DownloadReviewDialog(QDialog):
         self._destination = self._download_dir
         self._conflict_policy = conflict_policy or "auto_rename"
         self._resolved_destination: Path | None = None
+        self._schedule_check: QCheckBox | None = None
+        self._schedule_edit: QDateTimeEdit | None = None
 
         self._build_ui()
         self._load_values()
@@ -118,6 +124,16 @@ class DownloadReviewDialog(QDialog):
         dest_container = QWidget()
         dest_container.setLayout(dest_row)
         form.addRow("Destination:", dest_container)
+
+        self._schedule_check = QCheckBox("Schedule download")
+        self._schedule_check.toggled.connect(self._on_schedule_toggled)
+        form.addRow("When:", self._schedule_check)
+
+        self._schedule_edit = QDateTimeEdit(QDateTime.currentDateTime().addSecs(300))
+        self._schedule_edit.setCalendarPopup(True)
+        self._schedule_edit.setDisplayFormat("yyyy-MM-dd HH:mm")
+        self._schedule_edit.setEnabled(False)
+        form.addRow("Start at:", self._schedule_edit)
 
         # Conflict policy row (shown when target exists)
         self._conflict_policy_container = QWidget()
@@ -230,6 +246,10 @@ class DownloadReviewDialog(QDialog):
             )
             self._refresh_duplicate_label()
 
+    def _on_schedule_toggled(self, checked: bool):
+        if self._schedule_edit is not None:
+            self._schedule_edit.setEnabled(checked)
+
     def _refresh_duplicate_label(self):
         dup_text = duplicate_state_label(self._duplicate_check.state)
         if self._duplicate_check.detail:
@@ -281,6 +301,9 @@ class DownloadReviewDialog(QDialog):
             # Both AUTO_RENAME and RENAME resolve to a unique safe destination
             self._destination = self._resolved_destination.parent
             self._filename = self._resolved_destination.name
+        if self.scheduled_at is not None and self.scheduled_at <= time.time():
+            log.warning("Download rejected: scheduled time must be in the future")
+            return
         self.accept()
 
     @property
@@ -294,6 +317,12 @@ class DownloadReviewDialog(QDialog):
     @property
     def conflict_policy(self) -> str:
         return self._conflict_policy
+
+    @property
+    def scheduled_at(self) -> float | None:
+        if self._schedule_check is None or not self._schedule_check.isChecked():
+            return None
+        return self._schedule_edit.dateTime().toSecsSinceEpoch()
 
     @property
     def file(self) -> DownloadFile:
