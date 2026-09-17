@@ -1,28 +1,47 @@
 # VANTA
 
-A desktop download manager built with Python 3.14, PySide6, and httpx.
+VANTA is a desktop download manager for analyzing web pages, discovering downloadable resources, and selecting what to download. It is built with Python, PySide6, `httpx`, and an async Qt event loop.
 
-## Features
+**Current version:** `2.0.0-dev`
+**Status:** Active development
 
-- **Source analysis** — Automatically detects supported URLs (direct file downloads, protected sources)
-- **Real downloads** — Streams to disk in chunks with byte-accurate progress and speed
-- **Download management** — Pause, resume, cancel with real state tracking
-- **SQLite persistence** — Download history and settings survive app restarts
-- **Dark design system** — Minimal, high-contrast dark theme
-- **Native folder selection** — Choose download locations via Qt file dialogs
-- **Settings** — Configure concurrent downloads, speed limits, theme
-- **Error handling** — Clear error messages for unsupported or protected sources
+## What it does
 
-## Technology Stack
+- Analyzes URLs and identifies direct, protected, or generic sources.
+- Discovers links and candidate resources from supported pages.
+- Classifies, groups, filters, sorts, scores, and resolves discovered resources.
+- Prepares selected resources for download with filename and duplicate handling.
+- Streams downloads with byte-accurate progress, speed reporting, pause, resume, and cancel support.
+- Schedules concurrent downloads through queue and lifecycle controllers.
+- Persists settings, download history, and task state in SQLite.
+- Provides a focused dark desktop interface with home, analysis, downloads, history, and settings views.
+- Applies URL and download security checks before network and file operations.
+
+## Development status
+
+The application is in the V2.0 development cycle. The current codebase includes the V2.0 analysis, resource discovery, download preparation, queue integration, scheduler handoff, execution lifecycle, and active-concurrency work.
+
+Latest local test run:
+
+```text
+1201 passed, 1 failed
+```
+
+The remaining failure is `tests/test_scheduler.py::test_completion_promotes_next`. It exposes a scheduler promotion issue: after one active task completes, the scheduler reports one active task instead of restoring the configured concurrency of three. The suite also reports pending async task cleanup in that scenario.
+
+## Technology
 
 - Python 3.14
-- PySide6 (Qt UI framework)
-- httpx (async HTTP client)
-- qasync (Qt + asyncio integration)
-- SQLAlchemy (SQLite ORM)
-- PyInstaller (packaging)
+- PySide6
+- `httpx`
+- `qasync`
+- SQLAlchemy with SQLite
+- PyInstaller
+- pytest and pytest-asyncio
 
-## Setup
+## Getting started
+
+Create and activate a virtual environment, then install the runtime and development dependencies:
 
 ```powershell
 py -3.14 -m venv .venv
@@ -31,103 +50,63 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt -r requirements-dev.txt
 ```
 
-## Run
+Start VANTA with:
 
 ```powershell
-.\.venv\Scripts\Activate.ps1
 python main.py
 ```
 
-## Test
+The application creates its runtime data and log directories on first start.
+
+## Testing
+
+Run the complete suite:
 
 ```powershell
-.\.venv\Scripts\Activate.ps1
 python -m pytest tests/ -v
 ```
 
-## Build Executable
+Run the scheduler tests while working on queue or concurrency behavior:
 
 ```powershell
-.\.venv\Scripts\Activate.ps1
+python -m pytest tests/test_scheduler.py tests/test_v200_phase42_scheduler_concurrency.py -q
+```
+
+## Build a Windows executable
+
+```powershell
 pip install pyinstaller
 pyinstaller --noconfirm --windowed --name VANTA --add-data "assets;assets" --add-data "data;data" main.py
 ```
 
-## Architecture
+## Project structure
 
-```
-VANTA/
-├── app/
-│   ├── core/
-│   │   ├── app_state.py       # Shared application state (singleton)
-│   │   ├── downloader.py      # Async download manager with chunked streaming
-│   │   ├── task_manager.py    # DownloadTask model + TaskStatus enum
-│   │   ├── file_manager.py    # File operations + unique path generation
-│   │   └── models.py          # AnalysisResult, DownloadFile, DownloadError dataclasses
-│   │
-│   ├── database/
-│   │   ├── connection.py      # SQLAlchemy engine + session factory
-│   │   ├── models.py          # DownloadRecord, SettingRecord
-│   │   └── repositories.py    # CRUD operations for downloads and settings
-│   │
-│   ├── services/
-│   │   ├── analyzer.py        # Orchestrates URL analysis via adapters
-│   │   ├── source_detector.py # Finds the right adapter for a URL
-│   │   ├── settings_service.py# Settings load/save with SQLite
-│   │   ├── download_service.py # Orchestrates analyze → download flow
-│   │   └── persistence_service.py # Auto-saves task state to DB
-│   │
-│   ├── sources/
-│   │   ├── base.py            # BaseSourceAdapter ABC
-│   │   ├── direct.py          # Direct file download adapter
-│   │   ├── protected.py       # Protected/login-required source adapter
-│   │   └── generic.py         # Fallback adapter
-│   │
-│   ├── ui/
-│   │   ├── main_window.py     # QMainWindow with sidebar + stacked pages
-│   │   ├── pages/
-│   │   │   ├── home_page.py   # URL input + analysis result display
-│   │   │   ├── downloads_page.py # Active downloads with cards
-│   │   │   ├── history_page.py  # Past downloads from SQLite
-│   │   │   └── settings_page.py  # Settings with native dialogs
-│   │   └── widgets/
-│   │       ├── sidebar.py     # Navigation sidebar
-│   │       ├── sidebar_button.py  # Sidebar navigation button
-│   │       └── download_card.py   # Reusable download progress card
-│   │
-│   └── utils/
-│       ├── constants.py       # App constants and paths
-│       └── logger.py          # Structured logging to file + console
-│
-├── assets/
-│   ├── styles/main.qss         # VANTA design system
-│   └── icons/
-├── data/
-│   └── vanta.db                # SQLite database (created on first run)
-├── logs/
-│   └── vanta.log               # Application log
-├── tests/
-│   ├── test_validators.py      # URL validation tests
-│   ├── test_analyzer.py        # Source adapter + detector tests
-│   ├── test_downloader.py      # Real download tests (local HTTP server)
-│   ├── test_models.py          # Data model tests
-│   └── test_database.py        # SQLite persistence tests
-├── main.py
-├── requirements.txt
-├── requirements-dev.txt
-├── AGENTS.md
-└── README.md
+```text
+app/
+|-- core/       Task models, downloader, queue controller, scheduler, and validation
+|-- database/   SQLite connection, ORM models, and repositories
+|-- services/   Analysis, discovery, resource intelligence, download workflow, and security
+|-- sources/    Source adapters, parsing, link classification, and candidate scoring
+|-- ui/         Main window, pages, download review, and reusable widgets
+`-- utils/      Paths, constants, and logging
+assets/         Qt styles and application icons
+data/           Runtime SQLite database files
+logs/           Application logs
+tests/          Unit, integration, security, UI, and lifecycle regression tests
+main.py         Application entry point
 ```
 
-## Design Principles
+## Design principles
 
-- **No fake progress** — Progress is computed from actual bytes downloaded
-- **UI never downloads** — UI emits signals, services handle logic, UI receives results
-- **Source adapters** — New sources added by implementing `BaseSourceAdapter`, no if/else chains
-- **Protected sources handled gracefully** — Login-required or Cloudflare-protected pages show clear error messages, never fake results
-- **State persistence** — Download task state and settings saved to SQLite on every state change
-- **Resume support** — Detects `Range` request support and resumes from local file size
+- **Accurate progress:** progress and speed come from actual bytes transferred.
+- **Separated responsibilities:** the UI coordinates user actions; services and core components own application behavior.
+- **Composable discovery:** source adapters and analysis services can evolve without a large conditional chain.
+- **Explicit lifecycle state:** queued, active, paused, completed, cancelled, and failed states are tracked and persisted.
+- **Security by default:** URLs, redirects, downloads, and filesystem targets are validated before use.
+- **Honest failure handling:** unsupported, protected, or unresolved sources produce clear outcomes rather than fabricated results.
 
-## License
+## Repository guidance
 
-Built for educational and personal use. Download only from authorized sources.
+See [AGENTS.md](AGENTS.md) for the supported setup, test, run, and packaging commands.
+
+Download only from sources you are authorized to access.
