@@ -10,7 +10,7 @@ from pathlib import Path
 import asyncio
 
 from PySide6.QtWidgets import QApplication
-from qasync import QEventLoop
+from qasync import QEventLoop, asyncClose
 
 from app.database.connection import init_db
 from app.metadata import APP_DESCRIPTION, APP_NAME, APP_VERSION, APP_VENDOR
@@ -46,6 +46,39 @@ def main():
 
     window = MainWindow()
     window.show()
+
+    # Register async shutdown handler - runs on qasync loop during aboutToQuit
+    @asyncClose
+    async def _shutdown():
+        try:
+            window._scheduling.stop()
+        except Exception as e:
+            from app.utils.logger import get_logger
+            log = get_logger("vanta.shutdown")
+            log.error("SchedulingService.stop failed: %s", e, exc_info=True)
+
+        try:
+            await window._app_state.download_manager.shutdown()
+        except Exception as e:
+            from app.utils.logger import get_logger
+            log = get_logger("vanta.shutdown")
+            log.error("DownloadManager.shutdown failed: %s", e, exc_info=True)
+
+        try:
+            window._persistence.flush()
+        except Exception as e:
+            from app.utils.logger import get_logger
+            log = get_logger("vanta.shutdown")
+            log.error("PersistenceService.flush failed: %s", e, exc_info=True)
+
+        try:
+            window._persistence.validate_database()
+        except Exception as e:
+            from app.utils.logger import get_logger
+            log = get_logger("vanta.shutdown")
+            log.error("PersistenceService.validate_database failed: %s", e, exc_info=True)
+
+    app.aboutToQuit.connect(_shutdown)
 
     with loop:
         loop.run_forever()

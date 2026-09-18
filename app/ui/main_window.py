@@ -345,19 +345,6 @@ class MainWindow(QMainWindow):
             )
 
     def closeEvent(self, event):
-        # Graceful shutdown
-        log.info("Application closing, initiating graceful shutdown...")
-
-        self._scheduling.stop()
-
-        # Step 1: Stop new work and pause/cancel active downloads
-        asyncio.run(self._app_state.download_manager.shutdown())
-
-        # Step 2: Flush every DownloadTask to persistence
-        # (shutdown has already set active tasks to PAUSED, a terminal state)
-        self._persistence.flush()
-
-        # Step 3: Validate the database
-        self._persistence.validate_database()
-
+        # Window close - graceful shutdown is handled via QApplication.aboutToQuit
+        # and qasync.asyncClose registered in main.py
         event.accept()
