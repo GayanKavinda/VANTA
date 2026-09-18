@@ -382,7 +382,7 @@ class TestHistoryLiveUpdates:
 # ── History removal ────────────────────────────────────────────────────────────
 
 class TestHistoryRemove:
-    """Verify Remove deletes the record but not the physical file."""
+    """Verify Remove deletes one record and its physical file."""
 
     def test_remove_deletes_db_record(self, qapp, tmp_path):
         save_download_task(_task(tmp_path, "hp_rm", status=TaskStatus.COMPLETED))
@@ -400,7 +400,7 @@ class TestHistoryRemove:
         finally:
             _cleanup(["hp_rm"])
 
-    def test_remove_does_not_delete_file(self, qapp, tmp_path):
+    def test_remove_deletes_file(self, qapp, tmp_path):
         dest = tmp_path / "hp_rmfile.zip"
         dest.write_bytes(b"file content")
         task = _task(tmp_path, "hp_rmfile", status=TaskStatus.COMPLETED)
@@ -408,17 +408,39 @@ class TestHistoryRemove:
         save_download_task(task)
         try:
             page = HistoryPage()
+            page.set_file_manager(FileManager(tmp_path))
             QTest.qWait(10)
             assert "hp_rmfile" in page._cards
+            assert page._cards["hp_rmfile"]._remove_btn.text() == "Delete File"
 
             page._cards["hp_rmfile"]._remove_btn.click()
             QTest.qWait(10)
 
-            assert dest.exists()
-            assert dest.read_bytes() == b"file content"
+            assert not dest.exists()
         finally:
             _cleanup(["hp_rmfile"])
             dest.unlink(missing_ok=True)
+
+    def test_clear_history_deletes_records_and_files(self, qapp, tmp_path):
+        tasks = []
+        for task_id in ("hp_clear_a", "hp_clear_b"):
+            destination = tmp_path / f"{task_id}.zip"
+            destination.write_bytes(b"file content")
+            task = _task(tmp_path, task_id, status=TaskStatus.COMPLETED)
+            task.destination = str(destination)
+            save_download_task(task)
+            tasks.append((task_id, destination))
+        try:
+            page = HistoryPage()
+            page.set_file_manager(FileManager(tmp_path))
+            page._clear_history_btn.click()
+            QTest.qWait(10)
+
+            assert not page._cards
+            assert not load_history_tasks()
+            assert all(not destination.exists() for _, destination in tasks)
+        finally:
+            _cleanup([task_id for task_id, _ in tasks])
 
 
 # ── File-opening actions ────────────────────────────────────────────────────
@@ -711,6 +733,15 @@ class TestHistorySearch:
 
 class TestDownloadsHistorySeparation:
     """Verify active/queued tasks do not appear in History."""
+
+    def test_clear_completed_removes_database_record(self, tmp_path):
+        manager, controller, _, _ = _env(tmp_path, max_concurrent=0)
+        task = _task(tmp_path, "hp_clear_db", status=TaskStatus.COMPLETED)
+        save_download_task(task)
+        manager.register_task(task)
+
+        assert controller.clear_completed() == [task.id]
+        assert task.id not in {item.id for item in load_history_tasks()}
 
     def test_active_task_not_in_history_page(self, qapp, tmp_path):
         manager, controller, _, _ = _env(tmp_path, max_concurrent=0)

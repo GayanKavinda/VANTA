@@ -150,7 +150,7 @@ class DownloadCard(QFrame):
         self._open_file_btn.setFixedSize(100, 32)
         self._open_file_btn.clicked.connect(lambda: self.open_file_requested.emit(self._task.id))
 
-        self._remove_btn = QPushButton("Remove")
+        self._remove_btn = QPushButton("Delete File")
         self._remove_btn.setFixedSize(90, 32)
         self._remove_btn.clicked.connect(lambda: self.remove_requested.emit(self._task.id))
 

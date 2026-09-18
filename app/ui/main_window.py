@@ -87,6 +87,7 @@ class MainWindow(QMainWindow):
         )
 
         self.history_page.set_queue_controller(self._queue_controller)
+        self.history_page.set_file_manager(self._app_state.file_manager)
 
         self.settings_page.set_services(
             self._app_state.download_manager,
@@ -134,7 +135,12 @@ class MainWindow(QMainWindow):
 
         tasks = load_download_tasks()
 
-        interrupted_tasks = self._queue_controller.restore_tasks(tasks)
+        # Completed files remain available in History, not the active queue.
+        tasks_for_queue = [
+            task for task in tasks
+            if task.status != TaskStatus.COMPLETED
+        ]
+        interrupted_tasks = self._queue_controller.restore_tasks(tasks_for_queue)
         self._scheduling.start()
         self.history_page.refresh()
 

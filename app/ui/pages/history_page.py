@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 
 from app.core.task_manager import DownloadTask, TaskStatus
 from app.core.queue_controller import QueueController
+from app.core.file_manager import FileManager
 from app.database.repositories import load_history_tasks, delete_download_task
 from app.services.filename_service import format_file_size
 from app.utils.logger import get_logger
@@ -41,6 +42,8 @@ class HistoryPage(QWidget):
         self._tasks: list[DownloadTask] = []
         self._cards: dict[str, HistoryCard] = {}
         self._queue_controller: QueueController | None = None
+        self._file_manager: FileManager | None = None
+        self._load_timer: QTimer | None = None
 
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(48, 48, 48, 48)
@@ -59,6 +62,11 @@ class HistoryPage(QWidget):
         self._status_label = QLabel()
         self._status_label.setStyleSheet("font-size: 13px; color: #8A8A9A;")
         main_layout.addWidget(self._status_label)
+
+        self._clear_history_btn = QPushButton("Clear History")
+        self._clear_history_btn.setFixedHeight(32)
+        self._clear_history_btn.clicked.connect(self._on_clear_history)
+        main_layout.addWidget(self._clear_history_btn, alignment=Qt.AlignRight)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -91,6 +99,9 @@ class HistoryPage(QWidget):
         if controller is not None:
             controller.add_queue_callback(self._on_queue_changed)
 
+    def set_file_manager(self, file_manager: FileManager):
+        self._file_manager = file_manager
+
     def _on_queue_changed(self, task: DownloadTask | None):
         """Refresh history when a task becomes terminal or a bulk change
         occurs.  Only terminal / bulk events trigger a reload — progress
@@ -101,7 +112,19 @@ class HistoryPage(QWidget):
                 self._tasks = [t for t in self._tasks if t.id != task.id]
                 self._render(self._tasks)
             return
-        QTimer.singleShot(0, self._load_history)
+        if self._load_timer is not None:
+            self._load_timer.stop()
+        self._load_timer = QTimer(self)
+        self._load_timer.setSingleShot(True)
+        self._load_timer.timeout.connect(self._load_history)
+        self._load_timer.start(0)
+
+    def closeEvent(self, event):
+        if self._load_timer is not None:
+            self._load_timer.stop()
+            self._load_timer.deleteLater()
+            self._load_timer = None
+        super().closeEvent(event)
 
     def _load_history(self):
         self._tasks = load_history_tasks()
@@ -186,8 +209,27 @@ class HistoryPage(QWidget):
             self._queue_controller.retry_download(task_id)
 
     def _on_remove(self, task_id: str):
+        task = self._resolve_task(task_id)
+        if (
+            task is not None
+            and task.destination
+            and self._file_manager is not None
+        ):
+            destination = Path(task.destination)
+            if destination.is_file():
+                self._file_manager.delete_file(destination)
         delete_download_task(task_id)
         self._tasks = [t for t in self._tasks if t.id != task_id]
+        self._render(self._tasks)
+
+    def _on_clear_history(self):
+        for task in self._tasks:
+            if task.destination and self._file_manager is not None:
+                destination = Path(task.destination)
+                if destination.is_file():
+                    self._file_manager.delete_file(destination)
+            delete_download_task(task.id)
+        self._tasks = []
         self._render(self._tasks)
 
     def refresh(self):
@@ -277,7 +319,7 @@ class HistoryCard(QWidget):
         self._retry_btn.clicked.connect(lambda: self.retry_requested.emit(self._task.id))
         btn_layout.addWidget(self._retry_btn, alignment=Qt.AlignRight)
 
-        self._remove_btn = QPushButton("Remove")
+        self._remove_btn = QPushButton("Delete File")
         self._remove_btn.setFixedSize(100, 28)
         self._remove_btn.setStyleSheet(self._btn_style())
         self._remove_btn.clicked.connect(lambda: self.remove_requested.emit(self._task.id))

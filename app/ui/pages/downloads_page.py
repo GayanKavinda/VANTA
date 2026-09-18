@@ -75,6 +75,11 @@ class DownloadsPage(QWidget):
         self._clear_completed_btn.clicked.connect(self._on_clear_completed)
         actions.addWidget(self._clear_completed_btn)
 
+        self._clear_history_btn = QPushButton("Clear All")
+        self._clear_history_btn.setFixedSize(100, 32)
+        self._clear_history_btn.clicked.connect(self._on_clear_history)
+        actions.addWidget(self._clear_history_btn)
+
         actions.addStretch(1)
         layout.addLayout(actions)
 
@@ -211,6 +216,17 @@ class DownloadsPage(QWidget):
         if self._queue_controller is None:
             return
 
+        completed_tasks = [
+            task for task in self._queue_controller.tasks
+            if task.status == TaskStatus.COMPLETED
+        ]
+        if self._download_service is not None:
+            for task in completed_tasks:
+                if task.destination:
+                    destination = Path(task.destination)
+                    if destination.is_file():
+                        self._download_service.file_manager.delete_file(destination)
+
         removed_ids = self._queue_controller.clear_completed()
 
         for task_id in removed_ids:
@@ -222,6 +238,30 @@ class DownloadsPage(QWidget):
             task = self._queue_controller.find_task(task_id)
             if task is not None and task.status == TaskStatus.COMPLETED:
                 card = self._cards.pop(task_id)
+                card.deleteLater()
+
+        if not self._cards:
+            self._placeholder.setVisible(True)
+        self._update_summary()
+
+    def _on_clear_history(self):
+        controller = self._queue_controller
+        if controller is None:
+            return
+
+        tasks = list(controller.tasks)
+        for task in tasks:
+            if (
+                task.destination
+                and self._download_service is not None
+                and Path(task.destination).is_file()
+            ):
+                self._download_service.file_manager.delete_file(Path(task.destination))
+            controller.remove_task(task.id)
+
+        for task in tasks:
+            card = self._cards.pop(task.id, None)
+            if card is not None:
                 card.deleteLater()
 
         if not self._cards:
@@ -307,6 +347,11 @@ class DownloadsPage(QWidget):
     def _on_remove_clicked(self, task_id: str):
         if self._queue_controller is None:
             return
+        task = self._queue_controller.find_task(task_id)
+        if task is not None and task.destination:
+            destination = Path(task.destination)
+            if destination.is_file() and self._download_service is not None:
+                self._download_service.file_manager.delete_file(destination)
         card = self._cards.pop(task_id, None)
         if card is not None:
             card.deleteLater()

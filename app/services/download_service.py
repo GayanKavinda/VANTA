@@ -39,6 +39,10 @@ class DownloadService:
     def analyzer(self) -> AnalyzerService:
         return self._analyzer
 
+    @property
+    def file_manager(self) -> FileManager:
+        return self._file_manager
+
     async def analyze_url(self, url: str) -> AnalysisResult:
         return await self._analyzer.analyze(url)
 

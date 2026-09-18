@@ -372,6 +372,7 @@ class QueueController:
     def clear_completed(self) -> list[str]:
         removed_ids = self._manager.clear_completed()
         for task_id in removed_ids:
+            delete_download_task(task_id)
             self._scheduler.on_task_removed(task_id)
         self._emit_queue_change(None)
         self._scheduler.on_queue_reordered()
