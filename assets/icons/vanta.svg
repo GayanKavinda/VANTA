@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="256" height="256" viewBox="0 0 256 256"
+     role="img" aria-label="VANTA">
+  <defs>
+    <!-- Subtle glossy highlight over the dark chrome background -->
+    <radialGradient id="vanta-bg-highlight" cx="50%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.07"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <!-- Soft inner shadow for the rounded shell -->
+    <radialGradient id="vanta-bg-shadow" cx="50%" cy="50%" r="70%">
+      <stop offset="0%" stop-color="#000000" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.22"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Outer shell: rounded square using VANTA dark chrome -->
+  <rect x="8" y="8" width="240" height="240" rx="58" ry="58"
+        fill="#0F1014"/>
+  <!-- Gloss highlight -->
+  <rect x="8" y="8" width="240" height="240" rx="58" ry="58"
+        fill="url(#vanta-bg-highlight)"/>
+  <!-- Inner shadow -->
+  <rect x="8" y="8" width="240" height="240" rx="58" ry="58"
+        fill="url(#vanta-bg-shadow)"/>
+  <!-- Thin shell border -->
+  <rect x="8" y="8" width="240" height="240" rx="58" ry="58"
+        fill="none" stroke="#1A1B20" stroke-width="1"/>
+
+  <!-- Download arrow that also reads as the VANTA "V" (▼) in the brand cyan -->
+  <g transform="translate(14 6)">
+    <!-- Main arrow body -->
+    <path d="M92 46 L92 150 L58 150 L120 204 L182 150 L148 150 L148 46 Z"
+          fill="#5AC8FA"/>
+    <!-- Subtle chrome highlight on the left face -->
+    <path d="M92 46 L92 150 L80 150 L80 88 L86 88 L86 46 Z"
+          fill="#9BF0FF" opacity="0.18"/>
+    <!-- Recessed stem inset so the glyph reads as a clear downward arrow -->
+    <path d="M100 54 L100 150 L104 150 L104 54 Z"
+          fill="#0F1014" opacity="0.45"/>
+    <!-- Arrow tip highlight -->
+    <path d="M120 198 L86 156 L90 160 L120 198 Z"
+          fill="#FFFFFF" opacity="0.10"/>
+  </g>
+
+  <!-- Centered subtle "VANTA" wordmark is intentionally avoided; the V-arrow
+       serves as the application symbol per icon design best practice. -->
+</svg>

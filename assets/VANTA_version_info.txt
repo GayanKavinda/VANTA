@@ -1,0 +1,39 @@
+# VANTA Windows executable version-resource definition.
+#
+# This is a pure VSVersionInfo(...) expression. PyInstaller loads it via
+# PyInstaller.utils.win32.versioninfo.load_version_info_from_text_file, which
+# reads the file and eval()s it in the versioninfo module namespace.
+#
+# The version values mirror app/version.py and app/metadata.py. Keep them in
+# sync - a test in tests/test_v200_phase411_windows_integration.py asserts
+# this file matches the live metadata constants.
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(2, 0, 0, 0),
+    prodvers=(2, 0, 0, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable('040904b0', [
+        StringStruct('CompanyName', 'VANTA Project'),
+        StringStruct('FileDescription', 'VANTA is a desktop download tool that analyzes web pages, discovers downloadable resources, and lets you pick what to fetch.'),
+        StringStruct('FileVersion', '2.0.0-dev'),
+        StringStruct('ProductVersion', '2.0.0-dev'),
+        StringStruct('ProductName', 'VANTA'),
+        StringStruct('InternalName', 'VANTA'),
+        StringStruct('OriginalFilename', 'VANTA.exe'),
+        StringStruct('LegalCopyright', '\u00a9 VANTA Project. All rights reserved.'),
+        StringStruct('PrivateBuild', 'dev'),
+      ]),
+    ]),
+    VarFileInfo([
+      VarStruct('Translation', [1033, 1200]),
+    ]),
+  ]
+)

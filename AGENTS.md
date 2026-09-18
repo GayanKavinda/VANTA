@@ -28,5 +28,11 @@ python -m pytest tests/ -v
 ```powershell
 .\.venv\Scripts\Activate.ps1
 pip install pyinstaller
-pyinstaller --noconfirm --windowed --name VANTA --add-data assets;assets --add-data data;data main.py
+pyinstaller --noconfirm --windowed --name VANTA --icon=assets/icons/vanta.ico --version-file=assets/VANTA_version_info.txt --manifest=assets/VANTA.manifest --add-data "assets;assets" --add-data "data;data" main.py
+```
+
+The same options are applied via the committed `VANTA.spec` (icon, version, manifest are wired into the `EXE()` call), which is the source of truth for reproducible builds:
+
+```powershell
+pyinstaller VANTA.spec
 ```

@@ -14,6 +14,7 @@ from qasync import QEventLoop, asyncClose
 
 from app.database.connection import init_db
 from app.metadata import APP_DESCRIPTION, APP_NAME, APP_VERSION, APP_VENDOR
+from app.ui.icon import icon
 from app.ui.main_window import MainWindow
 from app.utils.constants import DATA_DIR, LOGS_DIR
 from app.utils.logger import setup_logger
@@ -34,6 +35,7 @@ def main():
     app.setApplicationVersion(APP_VERSION)
     app.setApplicationDisplayName(APP_NAME)
     app.setOrganizationName(APP_VENDOR)
+    app.setWindowIcon(icon())
 
     loop = QEventLoop(app)
     asyncio.set_event_loop(loop)

@@ -22,6 +22,7 @@ from app.services.scheduling_service import SchedulingService
 from app.services.settings_service import SettingsService
 from app.ui.bulk_review import BulkReviewDialog
 from app.ui.download_review import DownloadReviewDialog
+from app.ui.icon import icon
 from app.ui.pages.home_page import HomePage
 from app.ui.pages.downloads_page import DownloadsPage
 from app.ui.pages.history_page import HistoryPage
@@ -38,6 +39,7 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         self.setWindowTitle("VANTA")
+        self.setWindowIcon(icon())
         self.resize(1200, 750)
 
         self._app_state = AppState()
